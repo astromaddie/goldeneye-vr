@@ -144,6 +144,20 @@ public class MainActivity extends SDLActivity {
         });
     }
 
+    /**
+     * Steam Frame "Quit to Steam" (port/vr/vr_openxr.cpp vr_finish_app): once the OpenXR session has
+     * ended, close the task so Steam gets its library back, and make sure the process is gone a moment
+     * later (the SDL thread does not always follow an activity finish).
+     */
+    public void quitApp() {
+        runOnUiThread(() -> {
+            Log.i(TAG, "Quit to Steam");
+            finishAndRemoveTask();
+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
+                    () -> android.os.Process.killProcess(android.os.Process.myPid()), 1500);
+        });
+    }
+
     // --- ROM file picker (called from the in-VR launcher, port/vr/vr_launcher.cpp) ---
     private static final int REQUEST_PICK_ROM = 0x6e;
 

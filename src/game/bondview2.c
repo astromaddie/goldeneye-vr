@@ -325,6 +325,9 @@ void gevrVoiceListenerBasis(float forward[3], float up[3])
 static s32 s_gevrHeadValid;
 static f32 s_gevrLastHead[3];
 static f32 s_gevrHeadBaseY;
+/* Steam Frame (standard.md section 1): View held 1 s recentres but keeps the standing height
+ * taken earlier; held 3 s it takes it again. A stereo switch or a level start still takes it. */
+static s32 s_gevrKeepBaseY;
 static f32 s_gevrMenuHead[3];
 static s32 s_gevrMenuHeadValid;
 static struct coord3d s_gevrMenuOffset;
@@ -354,7 +357,16 @@ void gevrStereoHeadWalk(struct coord3d *move_offset)
         s_gevrLastHead[0] = head[0];
         s_gevrLastHead[1] = head[1];
         s_gevrLastHead[2] = head[2];
+#ifdef GEVR_STEAM_FRAME
+        if (!s_gevrKeepBaseY)
+        {
+            s_gevrHeadBaseY = head[1];
+            sysLogPrintf(LOG_NOTE, "stereo: standing height taken at %.0f cm", head[1]);
+        }
+        s_gevrKeepBaseY = FALSE;
+#else
         s_gevrHeadBaseY = head[1];
+#endif
         s_gevrHeadValid = TRUE;
         return;
     }
@@ -872,9 +884,18 @@ void gevrStereoFrame(s32 inlevel)
 
         gevrVrSetWorldScale(GEVR_UNITS_PER_METRE * D_800364CC);
 
-        if (gevrVrTakeRecenter())
         {
-            gevrStereoRecenter();
+            s32 recentre = gevrVrTakeRecenter();
+
+            if (recentre)
+            {
+#ifdef GEVR_STEAM_FRAME
+                /* 1: recentre, keeping the standing height; 2: and take it again */
+                s_gevrKeepBaseY = (recentre < 2 && s_gevrHeadValid) ? TRUE : FALSE;
+                sysLogPrintf(LOG_NOTE, "stereo: recentre%s", s_gevrKeepBaseY ? "" : " + standing height");
+#endif
+                gevrStereoRecenter();
+            }
         }
 
         /* PD joy_for_vr; in the tank the left stick turns the tank and the view rides on it (#28) */

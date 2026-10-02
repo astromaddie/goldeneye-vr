@@ -51,6 +51,10 @@ int shaders_build_xr_projection(
 #endif
 
 
+// XR_VALVE_frame_controller_interaction was advertised and enabled (vr_openxr.cpp), so the
+// Steam Frame controller profile can be suggested (vr_input.cpp).
+extern bool g_frameControllerExt;
+
 extern XrVector3f gHeadPos;
 extern XrQuaternionf vr_HMD_rot_Q;
 extern XrQuaternionf gRawHeadQ;

@@ -36,6 +36,7 @@
 #ifdef GEVR_STEAM_FRAME
 #  include <unistd.h>
 #  include "vr_frame.h"
+#  include "vr_system.h"
 #endif
 
 #ifdef ANDROID
@@ -264,6 +265,49 @@ static void vr_synth_views()
     }
 }
 
+extern "C" void vr_input_profile_changed(void);   // vr_input.cpp
+extern "C" void vrInputReleaseAll(void);           // vr_input.cpp
+
+// Leave the app for good: MainActivity.quitApp() finishes the task and the process ends a moment later.
+static void vr_finish_app(const char *why)
+{
+    static bool done = false;
+    if (done) return;
+    done = true;
+    LOGI("[vr-sys] leaving the app (%s)", why);
+    JNIEnv *env = (JNIEnv *)SDL_AndroidGetJNIEnv();
+    jobject activity = (jobject)SDL_AndroidGetActivity();
+    if (env && activity) {
+        jclass cls = env->GetObjectClass(activity);
+        jmethodID m = env->GetMethodID(cls, "quitApp", "()V");
+        if (m) env->CallVoidMethod(activity, m);
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        env->DeleteLocalRef(cls);
+        env->DeleteLocalRef(activity);
+    }
+}
+
+// "Quit to Steam" (the launcher, the menu-hold prompt): ask the runtime to end the session, as
+// the standard wants; the app goes when it says EXITING, or after 3 s if it never does.
+static double g_quitRequestMs = 0.0;
+extern "C" void gevrQuitToSteam(void)
+{
+    if (g_vrState.session == XR_NULL_HANDLE || !g_vrState.sessionRunning) {
+        vr_finish_app("quit with no running session");
+        return;
+    }
+    const XrResult r = xrRequestExitSession(g_vrState.session);
+    LOGI("[vr-sys] Quit to Steam: xrRequestExitSession -> %d", (int)r);
+    g_quitRequestMs = vrFrameNowMs();
+    if (XR_FAILED(r)) vr_finish_app("xrRequestExitSession failed");
+}
+static void vr_quit_watchdog()
+{
+    if (g_quitRequestMs > 0.0 && vrFrameNowMs() - g_quitRequestMs > 3000.0) {
+        vr_finish_app("the runtime did not answer the exit request in 3 s");
+    }
+}
+
 // What a dump (vr_frame.cpp) logs next to the images: the eyes' poses and FOV of this XR frame.
 static void vr_dump_state()
 {
@@ -440,6 +484,7 @@ static XrRuntimeType gActiveRuntime = XrRuntimeType::Unknown;
 bool is_meta_runtime = false;
 // GoldenEye: the curved virtual screen is a cylinder layer (VrScreenCurved).
 static bool g_cylinderSupported = false;
+bool g_frameControllerExt = false;   // XR_VALVE_frame_controller_interaction enabled (vr_input.cpp suggests its profile)
 static bool g_refreshRateSupported = false;
 /*
  * Display refresh rate (VrRefreshRate, goldeneye-vr.ini; 0 = the runtime's).
@@ -579,6 +624,11 @@ static std::vector<const char*> vr_enumerate_extensions()
             enabledExts.push_back(XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME);
             g_cylinderSupported = true;
             LOGI("Extension enabled: %s", XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME);
+        }
+        if (std::strcmp(ext.extensionName, "XR_VALVE_frame_controller_interaction") == 0) {
+            enabledExts.push_back("XR_VALVE_frame_controller_interaction");
+            g_frameControllerExt = true;
+            LOGI("Extension enabled: XR_VALVE_frame_controller_interaction");
         }
         if (std::strcmp(ext.extensionName, "XR_FB_color_space") == 0) {
             enabledExts.push_back("XR_FB_color_space");
@@ -761,7 +811,15 @@ extern "C" bool vr_configure_resolution() {
     LOGI("HMD aspect ratio: %.4f", XrAspect);
 
     // --- Fixed width enforced, height derived from aspect ratio ---
+#ifdef GEVR_STEAM_FRAME
+    // Steam Frame: the runtime's recommended width (1728 on the Frame) times RENDER_SCALE,
+    // not the Quest's fixed 1832 (standard.md section 9).
+    const uint32_t VR_FIXED_WIDTH = (uint32_t)VrRealRecommendedW;
+    LOGI("[vr] eye width: recommended %d x RENDER_SCALE %.2f (the Quest build's fixed width would be 1832)",
+         VrRealRecommendedW, RENDER_SCALE);
+#else
     constexpr uint32_t VR_FIXED_WIDTH = 1832;
+#endif
 
     VrRecommendedW = VR_FIXED_WIDTH & ~1u; // ensures an even width too, for consistency
     uint32_t derivedH = (uint32_t)std::lround((double)VrRecommendedW / XrAspect);
@@ -3685,6 +3743,9 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
 extern "C" void vr_poll_events(void)
 {
     if (!g_vrState.instance) return;
+#ifdef GEVR_STEAM_FRAME
+    vr_quit_watchdog();
+#endif
 
     while (true) {
         XrEventDataBuffer event;
@@ -3736,12 +3797,24 @@ extern "C" void vr_poll_events(void)
                     case XR_SESSION_STATE_LOSS_PENDING:
                         g_vrState.sessionRunning = false;
                         LOGI("Session exiting/loss pending");
+#ifdef GEVR_STEAM_FRAME
+                        // Quit to Steam, or the system asked the app to go: the session is over, so is the app
+                        if (ssEvent->state == XR_SESSION_STATE_EXITING) {
+                            vr_finish_app("session EXITING");
+                        }
+#endif
                         break;
                     case XR_SESSION_STATE_VISIBLE:
                     default: break;
                 }
                 break;
             }
+#ifdef GEVR_STEAM_FRAME
+            case XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED:
+                LOGI("[VR_CTRL] interaction profile changed");
+                vr_input_profile_changed();
+                break;
+#endif
             case XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING:
                 g_vrState.sessionRunning = false;
                 LOGI("Instance loss pending");
@@ -4125,6 +4198,9 @@ extern "C" bool vr_begin_frame_and_update_poses()
     for (auto it = g_screenRecenterTimes.begin(); it != g_screenRecenterTimes.end();) {
         if (g_frameState.predictedDisplayTime >= *it) {
             g_screenPlaced = false;
+#ifdef GEVR_STEAM_FRAME
+            vrSystemRuntimeRecentre();   // the system recentred: the body heading follows, as for View held 1 s
+#endif
             it = g_screenRecenterTimes.erase(it);
         } else {
             ++it;
@@ -4210,6 +4286,12 @@ extern "C" bool vr_begin_frame_and_update_poses()
     vr_update_head_tracking(g_frameState.predictedDisplayTime);
     update_vr_controllers(g_frameState.predictedDisplayTime);
 #ifdef GEVR_STEAM_FRAME
+    // Focus lost (the dashboard, another app): input is ignored and nothing stays held. A desk run
+    // (force_render) has no focus and no controllers anyway, so it is not cut off here.
+    if (!g_sessionFocused && !g_synthHead) {
+        vrInputReleaseAll();
+    }
+    vrSystemFrame(g_sessionFocused || g_synthHead ? 1 : 0);
     if (g_synthHead) {
         // no controllers on a desk: park the hands at rest and let go of everything
         float hp[3], hq[4];

@@ -49,6 +49,10 @@
 #include "vr_settings.h"
 #include "vr_haptics.h"
 #include "vr_diag.h"
+#ifdef GEVR_STEAM_FRAME
+extern "C" int gevrSystemBack(void);   // vr_system.cpp: a short View press
+extern "C" void gevrQuitToSteam(void); // vr_openxr.cpp
+#endif
 
 extern "C" {
 int gevrVrPumpBegin(void);            // port/src/gevr_engine_shim.c
@@ -1983,7 +1987,17 @@ bool feedGamepad(ImGuiIO &io) {
     if (inj.x || inj.y)
         s = {inj.x / 80.0f, inj.y / 80.0f};
     const float t = 0.5f;
-    const bool back = get_button_state(1, "b") || get_button_state(0, "y") || (inj.mask & 0x4000);
+#ifdef GEVR_STEAM_FRAME
+    // Steam Frame: a short View press is back, and the D-pad steers like the stick (standard.md sections 1, 3)
+    const bool viewBack = gevrSystemBack() != 0;
+    if (get_button_state(0, "dpad_up")) s.y = 1.0f;
+    if (get_button_state(0, "dpad_down")) s.y = -1.0f;
+    if (get_button_state(0, "dpad_left")) s.x = -1.0f;
+    if (get_button_state(0, "dpad_right")) s.x = 1.0f;
+#else
+    const bool viewBack = false;
+#endif
+    const bool back = get_button_state(1, "b") || get_button_state(0, "y") || viewBack || (inj.mask & 0x4000);
     const bool select = get_button_state(1, "a") || get_button_state(0, "x") || (inj.mask & 0x8000);
     const bool navUsed = fabsf(s.x) > t || fabsf(s.y) > t || back || select;
     const bool pointing = feedPointer(io, navUsed);
@@ -2523,8 +2537,13 @@ extern "C" void gevrLauncherRun(void)
             ImGui::Spacing();
             ImGui::TextColored(gold, "SCREEN");
             if (ImGui::IsItemHovered()) {
+#ifdef GEVR_STEAM_FRAME
+                ImGui::SetTooltip("Both grips grab the screen; right stick: distance / size.\n"
+                                  "Hold View (left controller) for a second to recentre it.");
+#else
                 ImGui::SetTooltip("Both grips grab the screen; right stick: distance / size.\n"
                                   "Hold the left stick click to recentre it.");
+#endif
             }
             {
                 int curved = VrScreenCurved;
@@ -2634,11 +2653,13 @@ extern "C" void gevrLauncherRun(void)
                 }
                 // GitHub pre-releases too (UpdateChecker.java): for trying a
                 // fix before it ships. Saved by the updater, not the ini.
+#ifndef GEVR_STEAM_FRAME   // the Frame build has no GitHub updater
                 bool tests = upd.testBuilds;
                 if (ImGui::Checkbox("Offer test builds", &tests)) {
                     upd.testBuilds = tests;
                     gevrUpdaterCommand(tests ? "testbuilds:1" : "testbuilds:0");
                 }
+#endif
                 // Issue #25: texture packs, on their own page.
                 if (ImGui::Button(g_ActiveExtTexPack[0] ? "Mods... (HD textures on)" : "Mods...")) {
                     modsPage = true;
@@ -2718,6 +2739,25 @@ extern "C" void gevrLauncherRun(void)
                 hapticsPage = true;
             }
         }
+#ifdef GEVR_STEAM_FRAME
+        {
+            // Quit to Steam (standard.md section 1): a confirm, then the runtime is asked to end the session
+            static bool confirmQuit = false;
+            if (!confirmQuit) {
+                if (ImGui::Button("Quit to Steam")) confirmQuit = true;
+            } else {
+                ImGui::TextColored(gold, "Quit GoldenEye VR?");
+                ImGui::SameLine();
+                if (ImGui::Button("Yes, quit##quit")) {
+                    vr_log("launcher: quit to Steam");
+                    gevrQuitToSteam();
+                    confirmQuit = false;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("No##quit")) confirmQuit = false;
+            }
+        }
+#endif
         ImGui::BeginDisabled(active.empty() || !activeInfo.good);
         if (ImGui::Button("START", ImVec2(-1, ImGui::GetFrameHeight() * 1.6f))
             || (s_injectStart && !active.empty() && activeInfo.good)) {

@@ -52,7 +52,11 @@ unsigned VrMpFavStages = 0, VrMpFavSets = 0;
 int  vr_invert_hands      = 0;      /* swap which hand holds the weapon */
 
 /* 0 turns snap turning off and uses smooth turning; otherwise the snap angle. */
+#ifdef GEVR_STEAM_FRAME
+float VrUseSnapTurn = 30.0f;   /* Steam Frame (standard.md section 5): snap 30 degrees unless the ini says otherwise */
+#else
 float VrUseSnapTurn = 0.0f;
+#endif
 
 /* GoldenEye: 1 = true stereo in first-person play, 0 = everything on the virtual
  * screen. See vr_settings.h. */

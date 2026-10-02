@@ -49,6 +49,9 @@ extern XrAction gTrackpadTouchAction;
 extern XrAction gTriggerValueAction;
 extern XrAction gGripValueAction;
 extern XrAction gHapticAction;
+extern XrAction gViewAction;
+extern XrAction gBumperAction;
+extern XrAction gDpadAction[4];
 
 // === ACTION SPACES ===
 extern XrSpace gControllerSpace[2]; // Left/Right controller spaces
@@ -71,6 +74,12 @@ struct ControllerInputState {
     XrActionStateFloat trigger_value;
     XrActionStateBoolean grip_click;
     XrActionStateFloat grip_force;
+
+    // Steam Frame controllers (valve/frame_controller_valve): View and the bumper (left and
+    // right), and the left D-pad. Inactive on every other profile.
+    XrActionStateBoolean view;
+    XrActionStateBoolean bumper;
+    XrActionStateBoolean dpad[4];   // up, down, left, right
 
     // Calculated state
     XrPosef controller_pose;

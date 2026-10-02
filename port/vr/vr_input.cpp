@@ -127,6 +127,11 @@ XrAction gTrackpadTouchAction = XR_NULL_HANDLE;  // Trackpad touch
 XrAction gTriggerValueAction = XR_NULL_HANDLE;   // Analog trigger value
 XrAction gGripValueAction = XR_NULL_HANDLE;      // Analog grip value
 XrAction gHapticAction = XR_NULL_HANDLE;         // Haptic vibration
+// Steam Frame controllers (valve/frame_controller_valve), left View and the D-pad, both bumpers
+XrAction gViewAction = XR_NULL_HANDLE;           // View (left): the system layer's button
+XrAction gBumperAction = XR_NULL_HANDLE;         // Bumpers
+XrAction gDpadAction[4] = { XR_NULL_HANDLE, XR_NULL_HANDLE, XR_NULL_HANDLE, XR_NULL_HANDLE };  // up down left right
+bool gFrameProfile = false;                      // a Steam Frame controller is the active profile
 
 XrAction gGripForceAction = XR_NULL_HANDLE; // Physical force (Valve Index only)
 
@@ -201,6 +206,12 @@ XrResult create_vr_controllers_complete() {
     XR_TRY(CreateAction(gTriggerValueAction, "trigger_value", "Trigger Value", XR_ACTION_TYPE_FLOAT_INPUT));
     XR_TRY(CreateAction(gGripValueAction, "grip_value", "Grip Value", XR_ACTION_TYPE_FLOAT_INPUT));
     XR_TRY(CreateAction(gHapticAction, "haptic_output", "Haptic Feedback", XR_ACTION_TYPE_VIBRATION_OUTPUT));
+    XR_TRY(CreateAction(gViewAction, "view_button", "View Button", XR_ACTION_TYPE_BOOLEAN_INPUT));
+    XR_TRY(CreateAction(gBumperAction, "bumper_button", "Bumper", XR_ACTION_TYPE_BOOLEAN_INPUT));
+    XR_TRY(CreateAction(gDpadAction[0], "dpad_up", "D-pad Up", XR_ACTION_TYPE_BOOLEAN_INPUT));
+    XR_TRY(CreateAction(gDpadAction[1], "dpad_down", "D-pad Down", XR_ACTION_TYPE_BOOLEAN_INPUT));
+    XR_TRY(CreateAction(gDpadAction[2], "dpad_left", "D-pad Left", XR_ACTION_TYPE_BOOLEAN_INPUT));
+    XR_TRY(CreateAction(gDpadAction[3], "dpad_right", "D-pad Right", XR_ACTION_TYPE_BOOLEAN_INPUT));
 
     XR_TRY(CreateAction(gGripForceAction, "grip_force", "Grip Force", XR_ACTION_TYPE_FLOAT_INPUT));
 
@@ -230,7 +241,11 @@ XrResult create_vr_controllers_complete() {
         suggested.countSuggestedBindings = static_cast<uint32_t>(suggestedBindings.size());
 
         XrResult result = xrSuggestInteractionProfileBindings(g_vrState.instance, &suggested);
-        vr_log("[VR_CTRL] Profile %s -> %s", profile_path, (result == XR_SUCCESS) ? "OK" : "FAILED");
+        char resultName[XR_MAX_RESULT_STRING_SIZE] = "";
+        xrResultToString(g_vrState.instance, result, resultName);
+        vr_log("[VR_CTRL] xrSuggestInteractionProfileBindings %s (%u bindings) -> %s (%d)", profile_path,
+               (unsigned)suggestedBindings.size(), (result == XR_SUCCESS) ? "OK" : "FAILED", (int)result);
+        if (result != XR_SUCCESS) vr_log("[VR_CTRL]   %s", resultName);
         return XR_SUCCESS;
     };
 
@@ -300,11 +315,17 @@ XrResult create_vr_controllers_complete() {
             {gGripValueAction, "/user/hand/left/input/squeeze/value"},
             {gGripValueAction, "/user/hand/right/input/squeeze/value"},
 
-            // A/B buttons
-            {gButtonAAction, "/user/hand/left/input/a/click"},
+            // A/B on the right, and the left's two as X/Y: the game's off-hand buttons
+            // (they were bound to A/B on the left, so get_button_state(0, "x") never saw them)
             {gButtonAAction, "/user/hand/right/input/a/click"},
-            {gButtonBAction, "/user/hand/left/input/b/click"},
             {gButtonBAction, "/user/hand/right/input/b/click"},
+            {gButtonXAction, "/user/hand/left/input/a/click"},
+            {gButtonYAction, "/user/hand/left/input/b/click"},
+
+            // Menu: the trackpads' firm press (the system button is the runtime's; a float bound
+            // to a boolean action reads as pressed past the runtime's threshold)
+            {gMenuAction, "/user/hand/left/input/trackpad/force"},
+            {gMenuAction, "/user/hand/right/input/trackpad/force"},
 
             // Thumbstick
             {gThumbstickAction, "/user/hand/left/input/thumbstick"},
@@ -312,11 +333,12 @@ XrResult create_vr_controllers_complete() {
             {gThumbstickClickAction, "/user/hand/left/input/thumbstick/click"},
             {gThumbstickClickAction, "/user/hand/right/input/thumbstick/click"},
 
-            // Trackpad
+            // Trackpad. Index has no trackpad/click: its press is trackpad/force, and asking for the
+            // click made the runtime refuse the whole profile (XR_ERROR_PATH_UNSUPPORTED).
             {gTrackpadAction, "/user/hand/left/input/trackpad"},
             {gTrackpadAction, "/user/hand/right/input/trackpad"},
-            {gTrackpadClickAction, "/user/hand/left/input/trackpad/click"},
-            {gTrackpadClickAction, "/user/hand/right/input/trackpad/click"},
+            {gTrackpadClickAction, "/user/hand/left/input/trackpad/force"},
+            {gTrackpadClickAction, "/user/hand/right/input/trackpad/force"},
             {gTrackpadTouchAction, "/user/hand/left/input/trackpad/touch"},
             {gTrackpadTouchAction, "/user/hand/right/input/trackpad/touch"},
 
@@ -481,6 +503,51 @@ XrResult create_vr_controllers_complete() {
             {gHapticAction, "/user/hand/right/output/haptic"}
     });
 
+    // 9.9. VALVE STEAM FRAME CONTROLLERS, only when the runtime advertised and we enabled
+    // XR_VALVE_frame_controller_interaction. A split gamepad: the left has the stick, trigger,
+    // grip, bumper, View and the D-pad; the right the stick, trigger, grip, bumper, ABXY and Menu.
+    // The physical layout is fixed: left-handed play swaps what is bound to a hand (aim, triggers,
+    // grips, the gun), not these buttons (get_button_state).
+    if (g_frameControllerExt) {
+        SuggestBindings("/interaction_profiles/valve/frame_controller_valve", {
+                {gPoseAction, "/user/hand/left/input/grip/pose"},
+                {gPoseAction, "/user/hand/right/input/grip/pose"},
+
+                {gSelectAction, "/user/hand/left/input/trigger/value"},
+                {gSelectAction, "/user/hand/right/input/trigger/value"},
+                {gTriggerValueAction, "/user/hand/left/input/trigger/value"},
+                {gTriggerValueAction, "/user/hand/right/input/trigger/value"},
+                {gGripAction, "/user/hand/left/input/squeeze/value"},
+                {gGripAction, "/user/hand/right/input/squeeze/value"},
+                {gGripValueAction, "/user/hand/left/input/squeeze/value"},
+                {gGripValueAction, "/user/hand/right/input/squeeze/value"},
+
+                {gButtonAAction, "/user/hand/right/input/a/click"},
+                {gButtonBAction, "/user/hand/right/input/b/click"},
+                {gButtonXAction, "/user/hand/right/input/x/click"},
+                {gButtonYAction, "/user/hand/right/input/y/click"},
+                {gMenuAction, "/user/hand/right/input/menu/click"},
+                {gViewAction, "/user/hand/left/input/view/click"},
+                {gBumperAction, "/user/hand/left/input/bumper/click"},
+                {gBumperAction, "/user/hand/right/input/bumper/click"},
+
+                {gThumbstickAction, "/user/hand/left/input/thumbstick"},
+                {gThumbstickAction, "/user/hand/right/input/thumbstick"},
+                {gThumbstickClickAction, "/user/hand/left/input/thumbstick/click"},
+                {gThumbstickClickAction, "/user/hand/right/input/thumbstick/click"},
+
+                {gDpadAction[0], "/user/hand/left/input/dpad_up/click"},
+                {gDpadAction[1], "/user/hand/left/input/dpad_down/click"},
+                {gDpadAction[2], "/user/hand/left/input/dpad_left/click"},
+                {gDpadAction[3], "/user/hand/left/input/dpad_right/click"},
+
+                {gHapticAction, "/user/hand/left/output/haptic"},
+                {gHapticAction, "/user/hand/right/output/haptic"}
+        });
+    } else {
+        vr_log("[VR_CTRL] XR_VALVE_frame_controller_interaction not advertised: no Steam Frame profile suggested");
+    }
+
     // 10. Attach the ActionSet to the session (REQUIRED before xrBeginSession)
     XrSessionActionSetsAttachInfo attachInfo{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
     attachInfo.countActionSets = 1;
@@ -517,6 +584,9 @@ XrResult create_vr_controllers_complete() {
         state.trackpad_touch = {XR_TYPE_ACTION_STATE_BOOLEAN};
         state.trigger_value = {XR_TYPE_ACTION_STATE_FLOAT};
         state.grip_click = {XR_TYPE_ACTION_STATE_BOOLEAN};
+        state.view = {XR_TYPE_ACTION_STATE_BOOLEAN};
+        state.bumper = {XR_TYPE_ACTION_STATE_BOOLEAN};
+        for (auto& d : state.dpad) d = {XR_TYPE_ACTION_STATE_BOOLEAN};
 
         if (gIsValveIndex){
             state.grip_force = {XR_TYPE_ACTION_STATE_FLOAT};
@@ -628,6 +698,9 @@ XrResult update_vr_controllers(XrTime predicted_time) {
         XR_TRY(GetActionState(gTrackpadClickAction, handPath, state.trackpad_click));
         XR_TRY(GetActionState(gTrackpadTouchAction, handPath, state.trackpad_touch));
         XR_TRY(GetActionState(gGripAction, handPath, state.grip_click));
+        XR_TRY(GetActionState(gViewAction, handPath, state.view));
+        XR_TRY(GetActionState(gBumperAction, handPath, state.bumper));
+        for (int d = 0; d < 4; d++) XR_TRY(GetActionState(gDpadAction[d], handPath, state.dpad[d]));
 
         // Actions float
         XR_TRY(GetActionState(gTriggerValueAction, handPath, state.trigger_value));
@@ -663,7 +736,28 @@ extern "C" bool get_button_state(int hand_index, const char* button_name) {
     // always the left controller's, whichever hand holds the gun. Asked for
     // as hand 0 (port/src/input.c), as before left-handed mode existed.
     if (strcmp(button_name, "menu") == 0) {
+        // Steam Frame: Menu is on the right controller (the system layer's View is the left's)
+        if (gFrameProfile) return gControllerStates[1].menu.currentState;
         return hand_index == 0 ? gControllerStates[0].menu.currentState : false;
+    }
+
+    // Steam Frame: ABXY are all on the right controller and View and the D-pad on the left, and
+    // they stay there whichever hand holds the gun (left-handed play swaps what is bound to a
+    // hand: aim, triggers, grips, the gun, the sticks; not the physical buttons). The game's
+    // "off hand" X and Y are the right controller's X and Y here.
+    if (gFrameProfile) {
+        const auto& left = gControllerStates[0];
+        const auto& right = gControllerStates[1];
+        if (strcmp(button_name, "a") == 0) return right.button_a.currentState;
+        if (strcmp(button_name, "b") == 0) return right.button_b.currentState;
+        if (strcmp(button_name, "x") == 0) return right.button_x.currentState;
+        if (strcmp(button_name, "y") == 0) return right.button_y.currentState;
+        if (strcmp(button_name, "view") == 0) return left.view.currentState;
+        if (strcmp(button_name, "bumper") == 0) return gControllerStates[hand_index].bumper.currentState;
+        if (strcmp(button_name, "dpad_up") == 0) return left.dpad[0].currentState;
+        if (strcmp(button_name, "dpad_down") == 0) return left.dpad[1].currentState;
+        if (strcmp(button_name, "dpad_left") == 0) return left.dpad[2].currentState;
+        if (strcmp(button_name, "dpad_right") == 0) return left.dpad[3].currentState;
     }
 
     // Issue #6: a stick's click goes with the stick (get_2d_input), so with
@@ -897,7 +991,26 @@ bool detect_headset_profile() {
 
     gIsValveIndex = (strstr(profileStr, "valve/index_controller") != nullptr);
     vr_log("[VR_CTRL] IsValveIndex: %d", (int)gIsValveIndex);
+    const bool wasFrame = gFrameProfile;
+    gFrameProfile = strstr(profileStr, "valve/frame_controller") != nullptr;
+    if (gFrameProfile != wasFrame) {
+        vr_log("[VR_CTRL] Steam Frame controller profile %s: ABXY, Menu, View, D-pad and bumpers read as the Frame's",
+               gFrameProfile ? "ACTIVE" : "no longer active");
+    }
     return true; // Succès
+}
+
+// The runtime reported a new interaction profile (a controller connected or changed).
+extern "C" void vr_input_profile_changed(void)
+{
+    detect_headset_profile();
+}
+
+// 1 when a Steam Frame controller is the active profile: the system layer is then the Frame's
+// (View) and the Quest-era chords (both stick clicks, a held left stick) are off.
+extern "C" int gevrVrFrameProfile(void)
+{
+    return gFrameProfile ? 1 : 0;
 }
 
 
@@ -2063,6 +2176,24 @@ extern "C" int gevrVrGripPose(int hand, float pos[3], float quat[4])
 }
 
 #ifdef GEVR_STEAM_FRAME
+// Focus lost (standard.md section 0): ignore input and let go of everything held, so a button down
+// while the dashboard opened is not still down when the game comes back.
+extern "C" void vrInputReleaseAll(void)
+{
+    for (int h = 0; h < 2; h++) {
+        ControllerInputState& st = gControllerStates[h];
+        st.select.currentState = st.menu.currentState = XR_FALSE;
+        st.button_a.currentState = st.button_b.currentState = XR_FALSE;
+        st.button_x.currentState = st.button_y.currentState = XR_FALSE;
+        st.thumbstick_click.currentState = st.trackpad_click.currentState = st.trackpad_touch.currentState = XR_FALSE;
+        st.grip_click.currentState = st.view.currentState = st.bumper.currentState = XR_FALSE;
+        for (auto& d : st.dpad) d.currentState = XR_FALSE;
+        st.trigger_value.currentState = st.grip_value.currentState = st.grip_force.currentState = 0.0f;
+        st.thumbstick.currentState = { 0.0f, 0.0f };
+        st.trackpad.currentState = { 0.0f, 0.0f };
+    }
+}
+
 // force_render (vr_diag.h): nobody is holding controllers, so park both hands at rest in front
 // of the hips, where a gun hangs in the lower corner of the view. Their view-space poses are
 // set, and the play-space ones the game's own camera snapshot reads when the session is not

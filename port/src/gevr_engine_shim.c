@@ -304,6 +304,11 @@ extern bool vr_apply_pending_scale(void);
 extern void vrSettingsLoad(void);
 extern bool get_button_state(int hand_index, const char *button_name); /* vr_input.cpp */
 extern void vr_screen_recenter(void);                                    /* vr_openxr.cpp */
+#ifdef GEVR_STEAM_FRAME
+extern int gevrVrFrameProfile(void);                                     /* vr_input.cpp */
+#else
+#define gevrVrFrameProfile() 0
+#endif
 
 static s32 gevrVrInitDone;
 static s32 gevrVrFrameBegun;
@@ -433,7 +438,7 @@ static void gevrVrFrameBegin(void)
 	/* Hold the left stick click for about a second to bring the virtual screen back in front of you. */
 	if (gevrVrFrameBegun) {
 		static u32 held;
-		if (get_button_state(0, "thumbstick_click")) {
+		if (get_button_state(0, "thumbstick_click") && !gevrVrFrameProfile()) {   /* Frame: View is the system layer */
 			if (++held == 72) {
 				vr_screen_recenter();
 			}
