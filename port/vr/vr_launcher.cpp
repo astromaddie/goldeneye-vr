@@ -233,6 +233,13 @@ void pollInjected(Injected &in)
     in.x = in.y = 0;
     if ((++tick % 15) != 0) return;
     const char *path = "/sdcard/Android/data/com.gevr.port/files/gevr_input.txt";
+#ifdef GEVR_STEAM_FRAME
+    // Steam Frame: the app id differs and the app's own folder is not reachable from the host,
+    // so the hook is read from the data folder instead (the working directory, which is
+    // ~/Documents/GoldenEye on the headset).
+    // tools/steam_frame/deploy.sh --autostart writes it to press the launcher's Start.
+    path = "gevr_input.txt";
+#endif
     FILE *f = fopen(path, "r");
     if (!f) return;
     int frames = 4;

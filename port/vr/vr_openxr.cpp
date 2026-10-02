@@ -33,6 +33,9 @@
 #include <array>
 #include <algorithm>
 #include <chrono>
+#ifdef GEVR_STEAM_FRAME
+#  include <unistd.h>
+#endif
 
 #ifdef ANDROID
 // Android Platform
@@ -215,6 +218,22 @@ static std::vector<XrSwapchainImageOpenGLKHR> g_swapchainImages[1];
 
 bool g_frameStarted = false;
 static XrFrameState g_frameState   = { XR_TYPE_FRAME_STATE };
+#ifdef GEVR_STEAM_FRAME
+// Steam Frame bring-up diagnostics (docs/STEAM_FRAME.md). A headset on a desk sits in
+// SYNCHRONIZED with shouldRender=false, so nothing would ever draw and the multiview
+// path could not be seen working. With a file named gevr_force_render in the data
+// folder (tools/steam_frame/deploy.sh --force-render) the frame is drawn and submitted
+// anyway. g_xrFrameCount / g_xrFramesRendered feed the throttled [vr-frame] log line.
+static bool     g_forceRender      = false;
+static uint64_t g_xrFrameCount     = 0;
+static uint64_t g_xrFramesRendered = 0;
+static const char *vr_session_state_name(int s)
+{
+    static const char *const names[] = { "UNKNOWN", "IDLE", "READY", "SYNCHRONIZED", "VISIBLE",
+                                         "FOCUSED", "STOPPING", "LOSS_PENDING", "EXITING" };
+    return (s >= 0 && s < (int)(sizeof(names) / sizeof(names[0]))) ? names[s] : "?";
+}
+#endif
 static std::array<XrView, 2> g_frameViews = { XrView{XR_TYPE_VIEW}, XrView{XR_TYPE_VIEW} };
 // GoldenEye stereo: the views the game's camera was built from, and the views of
 // the eye image actually in the swapchain. The game runs at 60 Hz against a
@@ -581,6 +600,16 @@ static bool vr_create_instance(const std::vector<const char*>& extensions)
     LOGI("OpenXR instance created successfully");
 #ifndef ANDROID
     vr_detect_runtime();
+#else
+    // Log only: is_meta_runtime stays false on Android, as it always was.
+    {
+        XrInstanceProperties props{XR_TYPE_INSTANCE_PROPERTIES};
+        if (XR_SUCCEEDED(xrGetInstanceProperties(g_vrState.instance, &props))) {
+            LOGI("OpenXR Runtime: %s (ver %u.%u.%u)", props.runtimeName,
+                 XR_VERSION_MAJOR(props.runtimeVersion), XR_VERSION_MINOR(props.runtimeVersion),
+                 XR_VERSION_PATCH(props.runtimeVersion));
+        }
+    }
 #endif
 
     return true;
@@ -1113,8 +1142,9 @@ static bool vr_create_swapchains()
             return false;
         }
 
-        LOGI("Swapchain eye=%d created (format=0x%llx) images=%u",
-             eye, (unsigned long long)chosenFormat, imageCount);
+        LOGI("Swapchain eye=%d created (format=0x%llx) images=%u size=%ux%u arraySize=%u multiview=%d",
+             eye, (unsigned long long)chosenFormat, imageCount, swapInfo.width, swapInfo.height,
+             swapInfo.arraySize, (int)use_multiview);
     }
 
     return true;
@@ -3574,6 +3604,10 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
     XrResult re = xrEndFrame(g_vrState.session, &endInfo);
     if (XR_FAILED(re))
         LOGE("xrEndFrame failed %d", (int)re);
+#ifdef GEVR_STEAM_FRAME
+    else if (++g_xrFramesRendered <= 3 || g_xrFramesRendered % 720 == 0)
+        LOGI("[vr-frame] xrEndFrame ok #%llu layers=%u", (unsigned long long)g_xrFramesRendered, (unsigned)numLayers);
+#endif
 
 }
 
@@ -3606,7 +3640,11 @@ extern "C" void vr_poll_events(void)
                 const XrEventDataSessionStateChanged* ssEvent =
                         (const XrEventDataSessionStateChanged*)baseEvent;
                 if (ssEvent->session != g_vrState.session) break;
+#ifdef GEVR_STEAM_FRAME
+                LOGI("Session state changed: %d (%s)", (int)ssEvent->state, vr_session_state_name((int)ssEvent->state));
+#else
                 LOGI("Session state changed: %d", (int)ssEvent->state);
+#endif
                 g_sessionFocused = ssEvent->state == XR_SESSION_STATE_FOCUSED;
 
                 switch (ssEvent->state) {
@@ -3672,6 +3710,11 @@ extern "C" void openxr_initialize_vr(JavaVM* vm, jobject activity, ANativeWindow
 {
     LOGI("========== OPENXR INIT (Android) START ==========");
     g_vrState = VRState{};
+
+#ifdef GEVR_STEAM_FRAME
+    g_forceRender = access("gevr_force_render", F_OK) == 0;   // cwd is the data folder
+    LOGI("Steam Frame build: force-render %s", g_forceRender ? "ON (gevr_force_render present)" : "off");
+#endif
 
     auto extensions = vr_enumerate_extensions();
     if (extensions.size() < 2) {
@@ -3948,6 +3991,20 @@ extern "C" bool vr_begin_frame_and_update_poses()
 
     g_frameStarted = true;
 
+#ifdef GEVR_STEAM_FRAME
+    g_xrFrameCount++;
+    const XrBool32 runtimeShouldRender = g_frameState.shouldRender;
+    if (g_forceRender && !g_frameState.shouldRender) {
+        g_frameState.shouldRender = XR_TRUE;
+    }
+    if (g_xrFrameCount <= 3 || g_xrFrameCount % 720 == 0) {
+        LOGI("[vr-frame] #%llu xrWaitFrame/xrBeginFrame ok, runtime shouldRender=%d%s, rendered so far %llu, predictedDisplayTime=%lld",
+             (unsigned long long)g_xrFrameCount, (int)runtimeShouldRender,
+             g_forceRender ? " (force-render on)" : "", (unsigned long long)g_xrFramesRendered,
+             (long long)g_frameState.predictedDisplayTime);
+    }
+#endif
+
     if (!g_frameState.shouldRender) {
         vr_end_empty_frame(g_frameState.predictedDisplayTime);
         g_frameStarted = false;
@@ -4149,6 +4206,23 @@ bool vr_begin_eye_render()
         glFramebufferTextureMultiviewOVR(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,        swapchainTex,          0, 0, 2);
         glFramebufferTextureMultiviewOVR(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, g_multiviewDepthArray, 0, 0, 2);
     }
+
+#ifdef GEVR_STEAM_FRAME
+    {
+        // The first frames only: is the two-layer multiview target complete on this GL stack
+        // (Zink on Turnip)? Anything but 0x8cd5 means the stereo path draws nothing.
+        static int sFboChecks = 0;
+        if (sFboChecks < 3) {
+            sFboChecks++;
+            const GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+            const GLenum err = glGetError();
+            LOGI("multiview FBO %s (status=0x%x, glError=0x%x, tex=%u, %dx%d, 2 layers, msaa=%d)",
+                 st == GL_FRAMEBUFFER_COMPLETE ? "COMPLETE" : "INCOMPLETE", (unsigned)st, (unsigned)err,
+                 (unsigned)swapchainTex, (int)g_internalRenderWidth, (int)g_internalRenderHeight,
+                 (int)gfx_msaa_level);
+        }
+    }
+#endif
 
     glViewport(0, 0, g_internalRenderWidth, g_internalRenderHeight);
     glScissor(0, 0, g_internalRenderWidth, g_internalRenderHeight);
