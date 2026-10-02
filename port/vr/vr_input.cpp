@@ -333,12 +333,11 @@ XrResult create_vr_controllers_complete() {
             {gThumbstickClickAction, "/user/hand/left/input/thumbstick/click"},
             {gThumbstickClickAction, "/user/hand/right/input/thumbstick/click"},
 
-            // Trackpad. Index has no trackpad/click: its press is trackpad/force, and asking for the
-            // click made the runtime refuse the whole profile (XR_ERROR_PATH_UNSUPPORTED).
+            // Trackpad. Index has no trackpad/click (asking for it made the runtime refuse the whole
+            // profile, XR_ERROR_PATH_UNSUPPORTED); its firm press is trackpad/force, which is Menu above
+            // and so is not bound to the click action as well (nothing reads that one).
             {gTrackpadAction, "/user/hand/left/input/trackpad"},
             {gTrackpadAction, "/user/hand/right/input/trackpad"},
-            {gTrackpadClickAction, "/user/hand/left/input/trackpad/force"},
-            {gTrackpadClickAction, "/user/hand/right/input/trackpad/force"},
             {gTrackpadTouchAction, "/user/hand/left/input/trackpad/touch"},
             {gTrackpadTouchAction, "/user/hand/right/input/trackpad/touch"},
 
@@ -964,6 +963,7 @@ bool detect_headset_profile() {
     char profileStr[256] = {};
     uint32_t outLen = 0;
     bool profileFound = false;
+    bool anyIndex = false, anyFrame = false;
 
     for (int h = 0; h < 2; h++) {
         const char* handName = (h == 0) ? "LEFT" : "RIGHT";
@@ -981,18 +981,21 @@ bool detect_headset_profile() {
                        sizeof(profileStr), &outLen, profileStr);
         vr_log("[VR_CTRL] %s hand profile selected is: %s", handName, profileStr);
         profileFound = true;
+        anyIndex = anyIndex || strstr(profileStr, "valve/index_controller") != nullptr;
+        anyFrame = anyFrame || strstr(profileStr, "valve/frame_controller") != nullptr;
     }
 
     if (!profileFound) {
         vr_log("[VR_CTRL] No interaction profile active yet. Will retry.");
         gIsValveIndex = false;
+        gFrameProfile = false;
         return false; // Indique que la détection a échoué
     }
 
-    gIsValveIndex = (strstr(profileStr, "valve/index_controller") != nullptr);
+    gIsValveIndex = anyIndex;
     vr_log("[VR_CTRL] IsValveIndex: %d", (int)gIsValveIndex);
     const bool wasFrame = gFrameProfile;
-    gFrameProfile = strstr(profileStr, "valve/frame_controller") != nullptr;
+    gFrameProfile = anyFrame;
     if (gFrameProfile != wasFrame) {
         vr_log("[VR_CTRL] Steam Frame controller profile %s: ABXY, Menu, View, D-pad and bumpers read as the Frame's",
                gFrameProfile ? "ACTIVE" : "no longer active");

@@ -229,6 +229,7 @@ static XrFrameState g_frameState   = { XR_TYPE_FRAME_STATE };
 // g_xrFrameCount / g_xrFramesRendered feed the throttled [vr-frame] log line.
 static bool     g_forceRender      = false;
 static bool     g_synthHead        = false;   // this XR frame uses the synthetic head
+static int64_t  g_eyeSwapFormat    = 0;       // the eye swapchain's GL format, for the dump's state log
 static double   g_eyeT0Ms          = 0.0;
 static uint64_t g_xrFrameCount     = 0;
 static uint64_t g_xrFramesRendered = 0;
@@ -284,7 +285,10 @@ static void vr_finish_app(const char *why)
         if (env->ExceptionCheck()) env->ExceptionClear();
         env->DeleteLocalRef(cls);
         env->DeleteLocalRef(activity);
+        if (m) return;   // quitApp's thread ends the process in a second
     }
+    LOGI("[vr-sys] no activity to quit through: _exit");
+    _exit(0);
 }
 
 // "Quit to Steam" (the launcher, the menu-hold prompt): ask the runtime to end the session, as
@@ -318,7 +322,7 @@ static void vr_dump_state()
     const float hp[3] = { (ep[0][0] + ep[1][0]) * 0.5f, (ep[0][1] + ep[1][1]) * 0.5f, (ep[0][2] + ep[1][2]) * 0.5f };
     const float ef[2][4] = { { g_frameViews[0].fov.angleLeft, g_frameViews[0].fov.angleRight, g_frameViews[0].fov.angleUp, g_frameViews[0].fov.angleDown },
                              { g_frameViews[1].fov.angleLeft, g_frameViews[1].fov.angleRight, g_frameViews[1].fov.angleUp, g_frameViews[1].fov.angleDown } };
-    vrFrameDumpState(hp, hq, ep, ef, g_xrFrameCount);
+    vrFrameDumpState(hp, hq, ep, ef, g_xrFrameCount, (long long)g_eyeSwapFormat);
 }
 #endif
 // GoldenEye stereo: the views the game's camera was built from, and the views of
@@ -413,6 +417,9 @@ float g_yawOffsetDegrees = 0.0f;
 // onto a physical jump and never comes back down, which is what used to leave
 // the player permanently shorter for the rest of the session.
 bool  gVrFloorRelativeSpace = false;
+#ifdef GEVR_STEAM_FRAME
+extern "C" int gevrVrFloorRelative(void) { return gVrFloorRelativeSpace ? 1 : 0; }   // vr_system.cpp
+#endif
 float gVrHeadHeightCm       = VR_NOMINAL_HEAD_HEIGHT_CM;
 
 extern "C" float VrPlayerHeight;   // your standing height, cm (bondwalk.c)
@@ -821,6 +828,21 @@ extern "C" bool vr_configure_resolution() {
     constexpr uint32_t VR_FIXED_WIDTH = 1832;
 #endif
 
+#ifdef GEVR_STEAM_FRAME
+    // never past what the runtime's swapchains allow
+    {
+        const uint32_t maxW = views[0].maxImageRectWidth, maxH = views[0].maxImageRectHeight;
+        const double scale = RENDER_SCALE > 0.0f ? RENDER_SCALE : 1.0;
+        const double wantW = (double)VR_FIXED_WIDTH * scale;
+        const double wantH = wantW / (double)XrAspect;
+        if (maxW && maxH && (wantW > maxW || wantH > maxH)) {
+            const double k = std::min((double)maxW / wantW, (double)maxH / wantH);
+            RENDER_SCALE = (float)(scale * k);
+            LOGI("[vr] eye size %.0fx%.0f exceeds the runtime's maximum %ux%u: RENDER_SCALE clamped to %.3f",
+                 wantW, wantH, maxW, maxH, RENDER_SCALE);
+        }
+    }
+#endif
     VrRecommendedW = VR_FIXED_WIDTH & ~1u; // ensures an even width too, for consistency
     uint32_t derivedH = (uint32_t)std::lround((double)VrRecommendedW / XrAspect);
     VrRecommendedH = (derivedH + 1u) & ~1u; // rounds up to the nearest even number, instead of truncating down
@@ -1211,6 +1233,9 @@ static int64_t vr_pick_swapchain_format(bool forQuadLayer = false)
 static bool vr_create_swapchains()
 {
     const int64_t chosenFormat = vr_pick_swapchain_format();
+#ifdef GEVR_STEAM_FRAME
+    g_eyeSwapFormat = chosenFormat;
+#endif
 
     XrSwapchainCreateInfo swapInfo{ XR_TYPE_SWAPCHAIN_CREATE_INFO };
     swapInfo.usageFlags  = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
@@ -4619,7 +4644,9 @@ extern "C" void vr_shutdown()
     // 5. Session
     if (g_vrState.session != XR_NULL_HANDLE) {
         if (g_vrState.sessionRunning) {
-            xrEndSession(g_vrState.session);
+            // not in STOPPING: xrEndSession answers XR_ERROR_SESSION_NOT_STOPPING; xrDestroySession ends it anyway
+            const XrResult er = xrEndSession(g_vrState.session);
+            if (XR_FAILED(er)) LOGI("vr_shutdown: xrEndSession %d ignored (destroying the session)", (int)er);
             g_vrState.sessionRunning = false;
         }
         xrDestroySession(g_vrState.session);

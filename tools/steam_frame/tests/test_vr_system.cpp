@@ -15,7 +15,7 @@
 
 #include "../../../port/vr/vr_system.h"
 
-static int s_profile = 1, s_view = 0;
+static int s_profile = 1, s_view = 0, s_floor = 1;
 static int s_recentreCalls, s_lastFlags, s_screenRecentres, s_buzzes[2];
 static double s_buzzAmp[2], s_buzzSec[2];
 static double s_fakeNow;
@@ -34,6 +34,7 @@ XrResult trigger_haptic_vibration_c(int hand, float amp, float sec)
     return XR_SUCCESS;
 }
 void vr_screen_recenter(void) { s_screenRecentres++; }
+int gevrVrFloorRelative(void) { return s_floor; }
 void gevrRequestRecenter(int flags) { s_recentreCalls++; s_lastFlags = flags; }
 }
 
@@ -112,6 +113,13 @@ int main()
     reset_counts();
     vrSystemRuntimeRecentre();
     CHECK(s_recentreCalls == 1 && s_screenRecentres == 1 && s_buzzes[0] == 0, "a system recentre follows without a buzz");
+
+    /* a LOCAL fallback space moves its origin with the recentre, so the standing height is taken again */
+    reset_counts();
+    s_floor = 0;
+    vrSystemRuntimeRecentre();
+    CHECK(s_lastFlags == 2, "a runtime recentre in a LOCAL space re-takes the standing height");
+    s_floor = 1;
 
     if (failures) { fprintf(stderr, "%d failure(s)\n", failures); return 1; }
     printf("vr_system: all checks passed\n");

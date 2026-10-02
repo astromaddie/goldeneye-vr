@@ -50,8 +50,10 @@ static const char *kDumpDir = "vr-dumps";
 static bool s_dumpActive;            /* the eye image of this XR frame is to be dumped */
 static bool s_dumpStereoPending;     /* a stereo gameplay frame is the dump target */
 static unsigned s_stereoFrames;
-static bool s_dumpDone;
+static bool s_dumpDone;          /* both eye layers were really written: the dump is complete */
 static bool s_dumpWrote;
+static bool s_dumpEyesOk;        /* this frame's eye layers were written */
+static int s_dumpTries;          /* frames that were armed but wrote nothing (no eye pass, GL error) */
 static char s_stateLine[640];
 static bool s_stateWritten;
 
@@ -102,6 +104,8 @@ static bool dump_read_framebuffer(const char *name, int w, int h, unsigned *opaq
     glGetIntegerv(GL_PACK_ALIGNMENT, &prevAlign);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glReadBuffer(GL_COLOR_ATTACHMENT0);
+    /* errors the renderer left pending must not be mistaken for this read's */
+    for (int n = 0; n < 16 && glGetError() != GL_NO_ERROR; n++) {}
     glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
     const GLenum err = glGetError();
     glPixelStorei(GL_PACK_ALIGNMENT, prevAlign);
@@ -120,8 +124,13 @@ extern "C" void vrFrameDumpFrameBegin(uint64_t xrFrame)
 {
     const GevrDiag *d = gevrDiag();
     s_dumpActive = false;
-    if (s_dumpDone) return;
-    if (d->dump_frame > 0 && xrFrame == (uint64_t)d->dump_frame) {
+    s_dumpEyesOk = false;
+    s_dumpWrote = false;
+    s_stateLine[0] = 0;
+    if (s_dumpDone || s_dumpTries > 600) return;
+    /* from frame N on, until a frame really draws the eyes: frame N itself may draw none
+     * (a redraw with nothing to replay, a mode switch) */
+    if (d->dump_frame > 0 && xrFrame >= (uint64_t)d->dump_frame) {
         s_dumpActive = true;
     }
 }
@@ -130,7 +139,7 @@ extern "C" void vrFrameDumpStereoFrame(void)
 {
     const GevrDiag *d = gevrDiag();
     s_stereoFrames++;
-    if (!s_dumpDone && d->dump_stereo_frame > 0 && s_stereoFrames == (unsigned)d->dump_stereo_frame) {
+    if (!s_dumpDone && d->dump_stereo_frame > 0 && s_stereoFrames >= (unsigned)d->dump_stereo_frame) {
         s_dumpActive = true;
         s_dumpStereoPending = true;
     }
@@ -167,6 +176,7 @@ extern "C" void vrFrameDumpEyes(unsigned tex, int w, int h)
     glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, 0, 0, 0);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)prevRead);
     s_dumpWrote = ok;
+    s_dumpEyesOk = ok;
     snprintf(s_stateLine, sizeof(s_stateLine), "eye=%dx%d opaque_pct=%u/%u", w, h, pct[0], pct[1]);
 }
 
@@ -183,7 +193,7 @@ extern "C" void vrFrameDumpScreen(int w, int h)
 }
 
 extern "C" void vrFrameDumpState(const float headPos[3], const float headQuat[4], const float eyePos[2][3],
-                                 const float eyeFov[2][4], uint64_t xrFrame)
+                                 const float eyeFov[2][4], uint64_t xrFrame, long long swapchainFormat)
 {
     if (!s_dumpActive || s_stateWritten) return;
     s_stateWritten = true;
@@ -201,6 +211,8 @@ extern "C" void vrFrameDumpState(const float headPos[3], const float headQuat[4]
         fprintf(f, "eye%d_pos=%.4f,%.4f,%.4f fov_l_r_u_d=%.4f,%.4f,%.4f,%.4f\n", e, eyePos[e][0], eyePos[e][1],
                 eyePos[e][2], eyeFov[e][0], eyeFov[e][1], eyeFov[e][2], eyeFov[e][3]);
     }
+    fprintf(f, "swapchain_format=0x%llx (0x8c43 = GL_SRGB8_ALPHA8: glReadPixels may return linear values on some drivers; "
+               "compare with the displayed image before trusting absolute levels)\n", swapchainFormat);
     fprintf(f, "ipd_m=%.4f\n", sqrtf((eyePos[1][0] - eyePos[0][0]) * (eyePos[1][0] - eyePos[0][0]) +
                                      (eyePos[1][1] - eyePos[0][1]) * (eyePos[1][1] - eyePos[0][1]) +
                                      (eyePos[1][2] - eyePos[0][2]) * (eyePos[1][2] - eyePos[0][2])));
@@ -219,9 +231,17 @@ extern "C" void vrFrameDumpFinish(void)
         fclose(f);
     }
     s_stateWritten = false;
-    FLOG("[vr-dump] wrote %s/vr-eye0.bmp, vr-eye1.bmp%s (%s)", kDumpDir, s_dumpWrote ? "" : " (failed)", s_stateLine);
+    if (s_dumpEyesOk) {
+        FLOG("[vr-dump] wrote %s/vr-eye0.bmp, vr-eye1.bmp (%s)", kDumpDir, s_stateLine);
+        s_dumpDone = true;   /* one complete dump per run */
+    } else {
+        /* nothing was drawn into the eyes this frame (or the read failed): stay armed for the next one */
+        if (++s_dumpTries == 1 || s_dumpTries % 120 == 0) {
+            FLOG("[vr-dump] armed, but this frame wrote no eye images (%d so far)%s", s_dumpTries,
+                 s_dumpWrote ? "; the virtual screen was written" : "");
+        }
+    }
     s_dumpActive = false;
-    s_dumpDone = true;   /* one dump per run */
     (void)s_dumpStereoPending;
 }
 

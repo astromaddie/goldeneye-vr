@@ -150,12 +150,21 @@ public class MainActivity extends SDLActivity {
      * later (the SDL thread does not always follow an activity finish).
      */
     public void quitApp() {
-        runOnUiThread(() -> {
-            Log.i(TAG, "Quit to Steam");
-            finishAndRemoveTask();
-            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
-                    () -> android.os.Process.killProcess(android.os.Process.myPid()), 1500);
-        });
+        Log.i(TAG, "Quit to Steam");
+        // Not the main looper: SDLActivity.onDestroy joins the SDL thread with no timeout (the quit
+        // event is never handled on Android), which would block the UI thread, and a kill posted
+        // there would never run. A plain thread kills the process about a second after the session ended.
+        Thread killer = new Thread(() -> {
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException ignored) {
+            }
+            android.os.Process.killProcess(android.os.Process.myPid());
+            System.exit(0);
+        }, "quit-killer");
+        killer.setDaemon(true);
+        killer.start();
+        runOnUiThread(this::finishAndRemoveTask);
     }
 
     // --- ROM file picker (called from the in-VR launcher, port/vr/vr_launcher.cpp) ---

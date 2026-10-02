@@ -52,7 +52,7 @@ Frame-only files: `vr_diag.{h,c}` (vr-diag.ini), `vr_frame.{h,cpp}` (synthetic h
   pointer.
 - Session states are logged by name. `shouldRender=false` (headset off the head) still ticks the
   game and submits empty frames; `force_render` draws anyway.
-- Quit to Steam: `xrRequestExitSession`, the app ends on `EXITING` (`MainActivity.quitApp`).
+- Quit to Steam: `xrRequestExitSession`; on `EXITING` (or 3 s) `MainActivity.quitApp` finishes the task and a plain thread kills the process about a second later (`SDLActivity.onDestroy` joins the SDL thread without a timeout, so nothing may depend on the main looper).
 
 ## 3. Camera-relative draw inventory (this Fast3D multiview path)
 
@@ -115,10 +115,10 @@ component list (it fails on the old Index block).
 | B | the game's B: use/reload; menus: back |
 | X | the off hand's weapon cycle / left panel (stereo); the game's A in menus |
 | Y | the game's B (same as B) |
-| R Menu | START (pause, the watch); hold 1.5 s: "back to the launcher? A yes, B no, Y quit to Steam, X texture pack" |
+| R Menu | START (pause, the watch); hold 1.5 s: "back to the launcher? A yes, B no (or a short View press), X texture pack"; Quit to Steam is in the launcher, with a confirm |
 | L View | system layer: short press Back in menus; hold 1 s recentre; hold 3 s recentre + standing height |
 | L D-pad | menus and the launcher: navigate; stereo play: up/down step the gun hand's weapon, left/right the off hand's |
-| Bumpers | bound and read, no game action yet (reserved for the tertiary role) |
+| Bumpers | stereo play: left bumper previous, right bumper next weapon of the gun hand (as D-pad up/down); the tertiary role |
 
 X/Y keep what the Touch left X/Y did, so a mission plays the same on both; the choice is open for
 the wearer to change (section 10).
@@ -131,7 +131,7 @@ the wearer to change (section 10).
 | --- | --- |
 | `force_render` | draw and submit while `shouldRender=false`, synthetic head at 1.6 m (64 mm IPD, the runtime's FOV), hands parked, the sim keeps running |
 | `diag_yaw` | the synthetic head's yaw in degrees (positive turns left); changes where the head looks relative to the body |
-| `dump_frame` | on XR frame N: `vr-dumps/vr-eye0.bmp`, `vr-eye1.bmp` (both multiview layers), `vr-hud.bmp` (the virtual screen as submitted), `vr-state.txt` |
+| `dump_frame` | from XR frame N, on the first frame that draws the eyes (a frame that draws none keeps it armed): `vr-dumps/vr-eye0.bmp`, `vr-eye1.bmp` (both multiview layers), `vr-hud.bmp` (the virtual screen as submitted), `vr-state.txt` |
 | `dump_stereo_frame` | the same on the Nth stereo gameplay frame |
 | `boot_stage`, `difficulty` | start in a solo mission (LEVELID, 33 = Dam; 0 agent .. 3 007) without menus |
 | `autostart` | the launcher presses Start after about 2 s |

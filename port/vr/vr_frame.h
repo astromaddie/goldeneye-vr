@@ -32,7 +32,7 @@ void vrFrameDumpEyes(unsigned tex, int w, int h);
 void vrFrameDumpScreen(int w, int h);
 /* State for the dump's log: called with the eye poses so the log shows what was drawn. */
 void vrFrameDumpState(const float headPos[3], const float headQuat[4], const float eyePos[2][3],
-                      const float eyeFov[2][4], uint64_t xrFrame);
+                      const float eyeFov[2][4], uint64_t xrFrame, long long swapchainFormat);
 /* Write the state log and report; called after the images. */
 void vrFrameDumpFinish(void);
 

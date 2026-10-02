@@ -85,12 +85,10 @@ void gevrRequestRecenter(s32 flags)
 #ifdef GEVR_STEAM_FRAME
 extern int gevrVrFrameProfile(void);   /* vr_input.cpp */
 extern int gevrSystemBack(void);       /* vr_system.cpp: a short View press, as the game's B */
-extern void gevrQuitToSteam(void);     /* vr_openxr.cpp */
 #define GEVR_FRAME_PROFILE() (gevrVrFrameProfile() != 0)
 #else
 #define GEVR_FRAME_PROFILE() 0
 #define gevrSystemBack() 0
-#define gevrQuitToSteam() ((void)0)
 #endif
 s32 gevrCrouchToggled(void)
 {
@@ -1174,13 +1172,6 @@ s32 inputReadController(s32 idx, OSContPad *npad)
             if (gevrReturnPrompt) {
                 const bool a = get_button_state(1, "a"), b = get_button_state(1, "b") || gevrSystemBack();
                 const bool x = get_button_state(0, "x");
-                const bool y = get_button_state(0, "y");
-                static bool yWas = true;
-                if (GEVR_FRAME_PROFILE() && y && !yWas) {
-                    LOGI("input: menu hold -> quit to Steam\n");
-                    gevrQuitToSteam();
-                }
-                yWas = y;
                 if (a && !aWas) {
                     LOGI("input: menu hold -> back to the launcher\n");
                     if (netIsActive()) {
@@ -1330,6 +1321,9 @@ s32 inputReadController(s32 idx, OSContPad *npad)
             static bool dpUp = false, dpDown = false, dpLeft = false, dpRight = false;
             const bool du = get_button_state(0, "dpad_up"), dd = get_button_state(0, "dpad_down");
             const bool dl = get_button_state(0, "dpad_left"), dr = get_button_state(0, "dpad_right");
+            /* bumpers, the tertiary role: left previous, right next weapon of the gun hand (as D-pad up/down) */
+            static bool lbWas = false, rbWas = false;
+            const bool lb = get_button_state(0, "bumper"), rb = get_button_state(1, "bumper");
             if (menu) {
                 if (gevrSystemBack()) npad->button |= B_BUTTON;
                 if (du) npad->button |= U_JPAD;
@@ -1341,7 +1335,10 @@ s32 inputReadController(s32 idx, OSContPad *npad)
                 if (dd && !dpDown) gevrCycleHandWeapon(0, -1);
                 if (dl && !dpLeft) gevrCycleHandWeapon(1, -1);
                 if (dr && !dpRight) gevrCycleHandWeapon(1, 1);
+                if (lb && !lbWas) gevrCycleHandWeapon(0, -1);
+                if (rb && !rbWas) gevrCycleHandWeapon(0, 1);
             }
+            lbWas = lb; rbWas = rb;
             dpUp = du; dpDown = dd; dpLeft = dl; dpRight = dr;
         }
         if (gevrReturnPrompt) npad->button &= ~(A_BUTTON | B_BUTTON | START_BUTTON);

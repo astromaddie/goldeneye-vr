@@ -17,6 +17,7 @@ bool get_button_state(int hand_index, const char *button_name); /* vr_input.cpp 
 XrResult trigger_haptic_vibration_c(int hand_index, float amplitude, float duration);
 void vr_screen_recenter(void);                                 /* vr_openxr.cpp */
 void gevrRequestRecenter(int flags);                           /* port/src/input.c */
+int gevrVrFloorRelative(void);                                 /* vr_openxr.cpp */
 }
 
 static sfvr_view_button s_view;
@@ -72,7 +73,9 @@ extern "C" void vrSystemFrame(int focused)
 
 extern "C" void vrSystemRuntimeRecentre(void)
 {
-    recentre(1, false, "the runtime moved the reference space");
+    /* A LOCAL fallback space moves its origin to the head's height, so the old standing height is
+     * meaningless after the runtime recentres it: take it again there. A floor space keeps it. */
+    recentre(gevrVrFloorRelative() ? 1 : 2, false, "the runtime moved the reference space");
 }
 
 extern "C" int gevrSystemBack(void)
