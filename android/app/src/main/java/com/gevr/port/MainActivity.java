@@ -51,12 +51,14 @@ public class MainActivity extends SDLActivity {
         // (port/vr/vr_launcher.cpp) shows where to copy one and picks it up.
         // A 2D activity here stranded Quest's shell in the loading space. Make
         // the folder now so it is there to copy into over USB.
-        File dataDir = new File(getExternalFilesDir(null), "data");
+        File dataDir = gameDataDir();
         if (!dataDir.isDirectory() && !dataDir.mkdirs()) {
             Log.w(TAG, "Could not create " + dataDir);
         }
 
-        updater = new UpdateChecker(this);
+        // The Steam Frame build does not self-update from GitHub (it is installed
+        // by adb or as a Steam devkit title); updaterStatus() answers "idle".
+        updater = BuildConfig.STEAM_FRAME ? null : new UpdateChecker(this);
         String version = "0";
         try {
             version = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
@@ -78,7 +80,19 @@ public class MainActivity extends SDLActivity {
 
     /** Tab-separated state for port/vr/vr_launcher.cpp; see UpdateChecker.status. */
     public String updaterStatus() {
-        return updater != null ? updater.status() : "";
+        if (updater != null) return updater.status();
+        if (BuildConfig.STEAM_FRAME) {
+            return "idle\t\t-1\t\t0\t" + installedVersionName();
+        }
+        return "";
+    }
+
+    private String installedVersionName() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Exception e) {
+            return "0";
+        }
     }
 
     /** "check", "update", "testbuilds:0" / "testbuilds:1". */
@@ -235,7 +249,7 @@ public class MainActivity extends SDLActivity {
     // Copies through a .part file so the launcher never sees half a ROM; it
     // checks the header and adopts or rejects the file.
     private void copyPickedRom(Uri uri) {
-        File dir = new File(getExternalFilesDir(null), "data");
+        File dir = gameDataDir();
         dir.mkdirs();
         File part = new File(dir, "picked.z64.part");
         long total = 0;
@@ -285,10 +299,49 @@ public class MainActivity extends SDLActivity {
         decorView.setSystemUiVisibility(uiOptions);
     }
 
+    /**
+     * Where the ROM (ge.z64), settings and saves live; it becomes the game's
+     * working directory (nativeInit). Quest: the app's external files dir.
+     *
+     * Steam Frame: /sdcard/Documents/GoldenEye, which Lepton maps to the
+     * headset's ~/Documents/GoldenEye. It survives Lepton resets (the container
+     * deletes app data on exit), so the ROM is copied there once. It needs
+     * all-files access on Android 11; without it (or if the folder cannot be
+     * written) the app falls back to its own files dir and says so in the log.
+     */
+    private File gameDataDir() {
+        if (BuildConfig.STEAM_FRAME) {
+            File docs = new File(
+                    android.os.Environment.getExternalStoragePublicDirectory(
+                            android.os.Environment.DIRECTORY_DOCUMENTS), "GoldenEye");
+            if (isWritableDir(docs)) {
+                return docs;
+            }
+            boolean manager = android.os.Build.VERSION.SDK_INT >= 30
+                    && android.os.Environment.isExternalStorageManager();
+            Log.w(TAG, "Documents folder " + docs + " is not writable (all-files access: " + manager
+                    + "); falling back to app-local storage, which a Lepton reset wipes");
+        }
+        return new File(getExternalFilesDir(null), "data");
+    }
+
+    private static boolean isWritableDir(File dir) {
+        try {
+            if (!dir.isDirectory() && !dir.mkdirs()) return false;
+            File probe = new File(dir, ".write-probe");
+            try (java.io.FileOutputStream out = new java.io.FileOutputStream(probe)) {
+                out.write(1);
+            }
+            return probe.delete();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     private void initializeGame() {
         Log.i(TAG, "initializeGame start");
 
-        File dataDir = new File(getExternalFilesDir(null), "data");
+        File dataDir = gameDataDir();
         Log.i(TAG, "Data dir: " + dataDir.getAbsolutePath());
 
         if (!dataDir.exists()) {
