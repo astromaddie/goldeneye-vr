@@ -23,8 +23,12 @@
 
     <!--
         The ROM, settings and saves live in /sdcard/Documents/GoldenEye, which is the
-        headset's ~/Documents and survives Lepton resets. Android 11 needs all-files
-        access for that folder (tools/steam_frame/deploy.sh grants it with appops).
+        headset's ~/Documents and survives Lepton resets. Lepton 2.8.14 makes
+        /sdcard/Documents a plain symlink to the host folder, so plain file permissions
+        decide and this grant is not needed there (checked with the grant reset to
+        default). It is declared in case a later Lepton enforces Android's storage
+        rules; MainActivity.gameDataDir falls back to app-local storage, with a log
+        line, if the folder cannot be written.
     -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
 
