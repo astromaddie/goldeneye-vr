@@ -169,15 +169,20 @@ States: **played in headset**, **verified unattended**, **not started**.
 | --- | --- |
 | APK build on a Mac, Khronos loader, persistent devkit title | verified unattended |
 | Session, multiview swapchain, 72 Hz loop, ROM from `~/Documents/GoldenEye` | verified unattended |
-| force_render synthetic head, parked hands, sim running | PENDING-DEVICE |
-| Stereo eye dumps in a mission (Dam) at yaw 0/90/180 | PENDING-DEVICE |
-| `[vr-perf]` in a mission | PENDING-DEVICE |
-| Frame profile suggested and active; Index suggest fixed | PENDING-DEVICE (suggest result); controls not started |
+| force_render synthetic head, parked hands, sim running | built, not yet run on the device (the first force_render, with the real head pose, did run: STEAM_FRAME.md) |
+| Stereo eye dumps in a mission (Dam) at yaw 0/90/180 | built, not yet run on the device |
+| `[vr-perf]` in a mission | built, not yet run on the device |
+| Frame profile suggested and active; Index suggest fixed | built, not yet run on the device (the Frame went offline, see below); controls not started |
 | Frame controls, D-pad, bumpers | not started (built, untested on device) |
 | System layer: View short/hold, recentre, height | host-tested state machine; not started on device |
 | Quit to Steam | built, not started on device |
 | Worn: scale, HUD distance, comfort, control labels | not started |
 | Depth submission, foveation, HUD quad, roomscale acceptance, spatial audio | not started |
+
+Why "not yet run": after the commit of the diagnostics the Frame dropped off the network at about
+23:50 JST on 2026-10-02 (Wi-Fi and USB both down, most likely a flat battery with nobody to charge
+it) and had not returned when this was written. The first things to run when it is back:
+`tools/steam_frame/tests/run_tests.sh`, then the stereo check commands in STEAM_FRAME.md.
 
 ## 9. First wear session (15 minutes)
 
