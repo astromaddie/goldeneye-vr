@@ -50,6 +50,9 @@ extern "C" {
 #include "gevr_surface_math.h"
 
 #include "../vr/vr_hub.h"
+#ifdef GEVR_STEAM_FRAME
+#include "../vr/vr_frame.h"
+#endif
 
 uintptr_t gfxFramebuffer;
 
@@ -4705,7 +4708,13 @@ extern "C" int gfx_vr_redraw_frame(void) {
         || !gfx_vr_eye_replay_ready() || !gevrVrRedrawDelta(delta)) {
         return 0;
     }
+#ifdef GEVR_STEAM_FRAME
+    vrFramePerfSetRedraw(1);   // [vr-perf] counts this pass as a redraw, not the game's own frame
+#endif
     if (!vr_begin_eye_render()) {
+#ifdef GEVR_STEAM_FRAME
+        vrFramePerfSetRedraw(0);
+#endif
         return 0;
     }
     gfx_rapi->start_draw_to_framebuffer(0, 1.0f);
@@ -4717,6 +4726,9 @@ extern "C" int gfx_vr_redraw_frame(void) {
     }
     gfx_opengl_draw_vignette(s_gevrLastVignette);
     vr_end_eye_render();
+#ifdef GEVR_STEAM_FRAME
+    vrFramePerfSetRedraw(0);
+#endif
     gevrVrMarkRedrawn();
     return 1;
 }

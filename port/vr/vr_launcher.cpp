@@ -48,6 +48,7 @@
 #include "vr_screen.h"
 #include "vr_settings.h"
 #include "vr_haptics.h"
+#include "vr_diag.h"
 
 extern "C" {
 int gevrVrPumpBegin(void);            // port/src/gevr_engine_shim.c
@@ -1955,6 +1956,16 @@ bool feedGamepad(ImGuiIO &io) {
     if (inj.mask & 0x1000) {
         s_injectStart = true;
     }
+#ifdef GEVR_STEAM_FRAME
+    {
+        // vr-diag.ini autostart: Start after a couple of seconds of launcher frames, once
+        static int frames = 0;
+        if (gevrDiag()->autostart && ++frames == 150) {
+            vr_log("launcher: autostart (vr-diag.ini)");
+            s_injectStart = true;
+        }
+    }
+#endif
     static bool pickerHookDone = false;
     if ((inj.mask & 0x0020) && !pickerHookDone) { // test hook: L opens the file picker
         pickerHookDone = true;

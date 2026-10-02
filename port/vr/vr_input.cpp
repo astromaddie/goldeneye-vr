@@ -2061,3 +2061,45 @@ extern "C" int gevrVrGripPose(int hand, float pos[3], float quat[4])
     quat[3] = q.w;
     return 1;
 }
+
+#ifdef GEVR_STEAM_FRAME
+// force_render (vr_diag.h): nobody is holding controllers, so park both hands at rest in front
+// of the hips, where a gun hangs in the lower corner of the view. Their view-space poses are
+// set, and the play-space ones the game's own camera snapshot reads when the session is not
+// focused; every button reads as released (the action states are inactive then anyway).
+extern "C" void gevrVrDiagParkHands(const float headPos[3], const float headQuat[4])
+{
+    // grip pose with the barrel (-Y) forward and the thumb side (-Z) up: +90 degrees about X
+    static const float kRestPos[2][3] = { { -0.17f, -0.28f, -0.36f }, { 0.17f, -0.28f, -0.36f } };
+    const XrQuaternionf rest = { 0.70710678f, 0.0f, 0.0f, 0.70710678f };
+    const XrQuaternionf hq = { headQuat[0], headQuat[1], headQuat[2], headQuat[3] };
+    for (int h = 0; h < 2; h++) {
+        ControllerInputState& st = gControllerStates[h];
+        st.is_active = false;
+        st.controller_pose.position = { kRestPos[h][0], kRestPos[h][1], kRestPos[h][2] };
+        st.controller_pose.orientation = rest;
+        // play = head * view
+        const float qx = hq.x, qy = hq.y, qz = hq.z, qw = hq.w;
+        const float vx = kRestPos[h][0], vy = kRestPos[h][1], vz = kRestPos[h][2];
+        const float tx = 2.0f * (qy * vz - qz * vy);
+        const float ty = 2.0f * (qz * vx - qx * vz);
+        const float tz = 2.0f * (qx * vy - qy * vx);
+        gCtrlPosePlay[h].position = { headPos[0] + vx + qw * tx + (qy * tz - qz * ty),
+                                      headPos[1] + vy + qw * ty + (qz * tx - qx * tz),
+                                      headPos[2] + vz + qw * tz + (qx * ty - qy * tx) };
+        gCtrlPosePlay[h].orientation = { qw * rest.x + qx * rest.w + qy * rest.z - qz * rest.y,
+                                         qw * rest.y - qx * rest.z + qy * rest.w + qz * rest.x,
+                                         qw * rest.z + qx * rest.y - qy * rest.x + qz * rest.w,
+                                         qw * rest.w - qx * rest.x - qy * rest.y - qz * rest.z };
+        st.select.currentState = XR_FALSE;
+        st.menu.currentState = XR_FALSE;
+        st.button_a.currentState = st.button_b.currentState = XR_FALSE;
+        st.button_x.currentState = st.button_y.currentState = XR_FALSE;
+        st.thumbstick_click.currentState = XR_FALSE;
+        st.grip_click.currentState = XR_FALSE;
+        st.trigger_value.currentState = 0.0f;
+        st.grip_value.currentState = 0.0f;
+        st.thumbstick.currentState = { 0.0f, 0.0f };
+    }
+}
+#endif

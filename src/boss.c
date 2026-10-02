@@ -391,6 +391,17 @@ void bossMainloop(void)
             fileValidateSaves();
             fileSetCurrentFolder(FOLDER1);
             set_selected_difficulty(DIFFICULTY_AGENT);
+#ifdef GEVR_STEAM_FRAME
+            {
+                /* vr-diag.ini difficulty (port/vr/vr_diag.c): an unattended run can start on another one */
+                extern int gevrDiagDifficulty(void);
+                s32 diagdiff = gevrDiagDifficulty();
+                if (diagdiff >= DIFFICULTY_AGENT && diagdiff <= DIFFICULTY_007) {
+                    set_selected_difficulty(diagdiff);
+                    lvlSetSelectedDifficulty(diagdiff);
+                }
+            }
+#endif
             set_solo_and_ptr_briefing(g_StageNum);
 
             if (tokenFind(1, "-hard"))

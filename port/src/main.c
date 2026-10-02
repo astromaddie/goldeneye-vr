@@ -413,6 +413,16 @@ int main(int argc, const char **argv)
     } else if (g_StageNum <= 0) {
         g_StageNum = STAGE_TITLE;
     }
+#ifdef GEVR_STEAM_FRAME
+    {
+        /* vr-diag.ini boot_stage (docs/STEAM_FRAME.md): an unattended run starts in a solo mission */
+        extern int gevrDiagBootStage(void);
+        if (gevrDiagBootStage() > 0) {
+            g_StageNum = gevrDiagBootStage();
+            sysLogPrintf(LOG_NOTE, "vr-diag boot_stage 0x%02x", g_StageNum);
+        }
+    }
+#endif
 
     if (g_StageNum == STAGE_TITLE && (sysArgCheck("--skip-intro") || g_SkipIntro)) {
         // shorthand for --boot-stage 0x26

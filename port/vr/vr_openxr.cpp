@@ -35,6 +35,7 @@
 #include <chrono>
 #ifdef GEVR_STEAM_FRAME
 #  include <unistd.h>
+#  include "vr_frame.h"
 #endif
 
 #ifdef ANDROID
@@ -219,12 +220,15 @@ static std::vector<XrSwapchainImageOpenGLKHR> g_swapchainImages[1];
 bool g_frameStarted = false;
 static XrFrameState g_frameState   = { XR_TYPE_FRAME_STATE };
 #ifdef GEVR_STEAM_FRAME
-// Steam Frame bring-up diagnostics (docs/STEAM_FRAME.md). A headset on a desk sits in
-// SYNCHRONIZED with shouldRender=false, so nothing would ever draw and the multiview
-// path could not be seen working. With a file named gevr_force_render in the data
-// folder (tools/steam_frame/deploy.sh --force-render) the frame is drawn and submitted
-// anyway. g_xrFrameCount / g_xrFramesRendered feed the throttled [vr-frame] log line.
+// Steam Frame bring-up diagnostics (docs/STEAM_FRAME.md, vr_diag.h, vr_frame.h). A headset
+// on a desk sits in SYNCHRONIZED with shouldRender=false, so nothing would draw and the
+// multiview path could not be seen working. With force_render (vr-diag.ini, or the
+// gevr_force_render marker) the frame is drawn and submitted anyway, from a synthetic
+// head at 1.6 m looking diag_yaw degrees round, with no controllers (hands parked).
+// g_xrFrameCount / g_xrFramesRendered feed the throttled [vr-frame] log line.
 static bool     g_forceRender      = false;
+static bool     g_synthHead        = false;   // this XR frame uses the synthetic head
+static double   g_eyeT0Ms          = 0.0;
 static uint64_t g_xrFrameCount     = 0;
 static uint64_t g_xrFramesRendered = 0;
 static const char *vr_session_state_name(int s)
@@ -235,6 +239,44 @@ static const char *vr_session_state_name(int s)
 }
 #endif
 static std::array<XrView, 2> g_frameViews = { XrView{XR_TYPE_VIEW}, XrView{XR_TYPE_VIEW} };
+#ifdef GEVR_STEAM_FRAME
+extern "C" void gevrVrDiagParkHands(const float headPos[3], const float headQuat[4]);   // vr_input.cpp
+
+// force_render: put the two eyes on the synthetic head, 64 mm apart along its right axis.
+// The FOV stays what the runtime located; if it gave none, the Frame's measured one.
+static void vr_synth_views()
+{
+    float hp[3], hq[4];
+    vrFrameSynthHead(hp, hq);
+    // the right axis of a rotation about +Y by quaternion (0, s, 0, c): (c^2 - s^2, 0, -2sc)
+    const float rx = hq[3] * hq[3] - hq[1] * hq[1];
+    const float rz = -2.0f * hq[1] * hq[3];
+    const float half = 0.032f;
+    for (int e = 0; e < 2; e++) {
+        const float side = e == 0 ? -half : half;
+        XrView& v = g_frameViews[e];
+        v.pose.orientation = { hq[0], hq[1], hq[2], hq[3] };
+        v.pose.position = { hp[0] + rx * side, hp[1], hp[2] + rz * side };
+        if (v.fov.angleLeft == 0.0f && v.fov.angleRight == 0.0f) {
+            v.fov = e == 0 ? XrFovf{ -1.0276f, 0.8845f, 0.8639f, -1.0482f }
+                           : XrFovf{ -0.8767f, 1.0326f, 0.8664f, -1.0423f };
+        }
+    }
+}
+
+// What a dump (vr_frame.cpp) logs next to the images: the eyes' poses and FOV of this XR frame.
+static void vr_dump_state()
+{
+    const float hq[4] = { g_frameViews[0].pose.orientation.x, g_frameViews[0].pose.orientation.y,
+                          g_frameViews[0].pose.orientation.z, g_frameViews[0].pose.orientation.w };
+    const float ep[2][3] = { { g_frameViews[0].pose.position.x, g_frameViews[0].pose.position.y, g_frameViews[0].pose.position.z },
+                             { g_frameViews[1].pose.position.x, g_frameViews[1].pose.position.y, g_frameViews[1].pose.position.z } };
+    const float hp[3] = { (ep[0][0] + ep[1][0]) * 0.5f, (ep[0][1] + ep[1][1]) * 0.5f, (ep[0][2] + ep[1][2]) * 0.5f };
+    const float ef[2][4] = { { g_frameViews[0].fov.angleLeft, g_frameViews[0].fov.angleRight, g_frameViews[0].fov.angleUp, g_frameViews[0].fov.angleDown },
+                             { g_frameViews[1].fov.angleLeft, g_frameViews[1].fov.angleRight, g_frameViews[1].fov.angleUp, g_frameViews[1].fov.angleDown } };
+    vrFrameDumpState(hp, hq, ep, ef, g_xrFrameCount);
+}
+#endif
 // GoldenEye stereo: the views the game's camera was built from, and the views of
 // the eye image actually in the swapchain. The game runs at 60 Hz against a
 // 72+ Hz display and builds its camera a frame or more before the image is
@@ -2344,6 +2386,14 @@ static bool vr_screen_present_common(unsigned int srcArrayTex, bool is2d, int w,
     glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_screenImages[idx].image, 0);
     glDisable(GL_SCISSOR_TEST);
     glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+#ifdef GEVR_STEAM_FRAME
+    if (vrFrameDumpDue()) {
+        // the virtual screen (menus, cutscenes, the launcher) as submitted; srcFbo is still the read framebuffer
+        vr_dump_state();
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, srcFbo);
+        vrFrameDumpScreen(w, h);
+    }
+#endif
     glEnable(GL_SCISSOR_TEST);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
@@ -2450,6 +2500,9 @@ static bool g_haveRecordedViews = false;
 
 extern "C" void gevrVrMarkEyesRendered(int stereo)
 {
+#ifdef GEVR_STEAM_FRAME
+    if (stereo) vrFrameDumpStereoFrame();
+#endif
     vr_stats_game_frame();
     if (stereo && g_haveCameraViews) {
         g_renderedViews = g_cameraViews;
@@ -2790,6 +2843,18 @@ static void vr_update_head_tracking(XrTime predictedDisplayTime)
             g_vrState.viewSpace, g_vrState.playSpace,
             predictedDisplayTime, &headLocation);
 
+#ifdef GEVR_STEAM_FRAME
+    if (g_synthHead) {
+        float hp[3], hq[4];
+        vrFrameSynthHead(hp, hq);
+        result = XR_SUCCESS;
+        headLocation.locationFlags = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT
+                                   | XR_SPACE_LOCATION_POSITION_TRACKED_BIT | XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
+        headLocation.pose.orientation = { hq[0], hq[1], hq[2], hq[3] };
+        headLocation.pose.position = { hp[0], hp[1], hp[2] };
+        headVelocity.velocityFlags = 0;
+    }
+#endif
     if (XR_FAILED(result)) {
         LOGE("xrLocateSpace failed %d", (int)result);
         positionValid = orientationValid = false;
@@ -3712,8 +3777,8 @@ extern "C" void openxr_initialize_vr(JavaVM* vm, jobject activity, ANativeWindow
     g_vrState = VRState{};
 
 #ifdef GEVR_STEAM_FRAME
-    g_forceRender = access("gevr_force_render", F_OK) == 0;   // cwd is the data folder
-    LOGI("Steam Frame build: force-render %s", g_forceRender ? "ON (gevr_force_render present)" : "off");
+    g_forceRender = vrFrameForceRender() != 0;   // vr-diag.ini or the marker, read from the data folder (cwd)
+    LOGI("Steam Frame build: force-render %s", g_forceRender ? "ON" : "off");
 #endif
 
     auto extensions = vr_enumerate_extensions();
@@ -3975,6 +4040,9 @@ extern "C" bool vr_begin_frame_and_update_poses()
 
     XrFrameWaitInfo waitInfo{ XR_TYPE_FRAME_WAIT_INFO };
     g_frameState = { XR_TYPE_FRAME_STATE };
+#ifdef GEVR_STEAM_FRAME
+    const double waitT0 = vrFrameNowMs();
+#endif
     XrResult r = xrWaitFrame(g_vrState.session, &waitInfo, &g_frameState);
     if (XR_FAILED(r)) {
         LOGE("xrWaitFrame failed: %d", (int)r);
@@ -3994,9 +4062,13 @@ extern "C" bool vr_begin_frame_and_update_poses()
 #ifdef GEVR_STEAM_FRAME
     g_xrFrameCount++;
     const XrBool32 runtimeShouldRender = g_frameState.shouldRender;
-    if (g_forceRender && !g_frameState.shouldRender) {
+    g_synthHead = g_forceRender && !runtimeShouldRender;
+    if (g_synthHead) {
         g_frameState.shouldRender = XR_TRUE;
     }
+    vrFramePerfFrame(vrFrameNowMs() - waitT0, (float)(g_frameState.predictedDisplayPeriod / 1.0e6),
+                     (int)g_frameState.shouldRender);
+    vrFrameDumpFrameBegin(g_xrFrameCount);
     if (g_xrFrameCount <= 3 || g_xrFrameCount % 720 == 0) {
         LOGI("[vr-frame] #%llu xrWaitFrame/xrBeginFrame ok, runtime shouldRender=%d%s, rendered so far %llu, predictedDisplayTime=%lld",
              (unsigned long long)g_xrFrameCount, (int)runtimeShouldRender,
@@ -4021,6 +4093,20 @@ extern "C" bool vr_begin_frame_and_update_poses()
     XrViewState viewState{ XR_TYPE_VIEW_STATE };
     uint32_t viewCount = 2;
     r = xrLocateViews(g_vrState.session, &viewLocate, &viewState, 2, &viewCount, g_frameViews.data());
+#ifdef GEVR_STEAM_FRAME
+    if (g_synthHead) {
+        // force_render: whatever the runtime located, the eyes are the synthetic head's,
+        // with the runtime's own FOV when it gave one (the Frame's measured one otherwise).
+        if (XR_FAILED(r) || viewCount < 2) {
+            r = XR_SUCCESS;
+            viewCount = 2;
+            for (auto& v : g_frameViews) { v.type = XR_TYPE_VIEW; v.next = nullptr; v.fov = { 0, 0, 0, 0 }; }
+        }
+        vr_synth_views();
+        viewState.viewStateFlags = XR_VIEW_STATE_POSITION_VALID_BIT | XR_VIEW_STATE_ORIENTATION_VALID_BIT
+                                 | XR_VIEW_STATE_POSITION_TRACKED_BIT | XR_VIEW_STATE_ORIENTATION_TRACKED_BIT;
+    }
+#endif
     if (XR_FAILED(r) || viewCount < 2) {
         LOGE("xrLocateViews failed: %d", (int)r);
         vr_end_empty_frame(g_frameState.predictedDisplayTime);
@@ -4123,6 +4209,14 @@ extern "C" bool vr_begin_frame_and_update_poses()
 
     vr_update_head_tracking(g_frameState.predictedDisplayTime);
     update_vr_controllers(g_frameState.predictedDisplayTime);
+#ifdef GEVR_STEAM_FRAME
+    if (g_synthHead) {
+        // no controllers on a desk: park the hands at rest and let go of everything
+        float hp[3], hq[4];
+        vrFrameSynthHead(hp, hq);
+        gevrVrDiagParkHands(hp, hq);
+    }
+#endif
     controller_pose();
     vr_pointer_update();
 
@@ -4185,6 +4279,10 @@ bool vr_begin_eye_render()
 
     GLuint swapchainTex = g_swapchainImages[0][g_acquiredSwapchainImageIndex].image;
     g_currentMultiviewSwapchainTex = swapchainTex;
+#ifdef GEVR_STEAM_FRAME
+    g_eyeT0Ms = vrFrameNowMs();
+    vrFrameGpuBegin();
+#endif
 
     // For menu blur under the Oculus/Meta PC runtime
     if (is_meta_runtime && copy_fbo_menu) {
@@ -4255,6 +4353,16 @@ void vr_end_eye_render()
     if (!gfx_get_current_rendering_api()->is_multiview()) return;
     if (!g_swapchainImageAcquired) return;
 
+#ifdef GEVR_STEAM_FRAME
+    vrFrameGpuEnd();
+    vrFramePerfAdd(vrFramePerfIsRedraw() ? VRPERF_REDRAW : VRPERF_RENDER, vrFrameNowMs() - g_eyeT0Ms);
+    if (vrFrameDumpDue()) {
+        // the one stall of a dump: both layers of the image about to be released
+        vr_dump_state();
+        vrFrameDumpEyes((unsigned)g_currentMultiviewSwapchainTex, (int)g_internalRenderWidth, (int)g_internalRenderHeight);
+    }
+#endif
+
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
     XrSwapchainImageReleaseInfo releaseInfo = { XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
@@ -4320,10 +4428,17 @@ extern "C" bool vr_end_frame_and_submit()
         return false;
 
     bool submitted = false;
+#ifdef GEVR_STEAM_FRAME
+    const double endT0 = vrFrameNowMs();
+#endif
     if (gfx_get_current_rendering_api()->is_multiview()) {
         vr_submit_frame(g_frameState, g_haveRenderedViews ? g_renderedViews : g_frameViews);
         submitted = true;
     }
+#ifdef GEVR_STEAM_FRAME
+    vrFramePerfAdd(VRPERF_END, vrFrameNowMs() - endT0);
+    vrFrameDumpFinish();
+#endif
 
     // xrEndFrame has run (or there was nothing to submit), so the frame is closed. This
     // used to be left set on the success path, which meant g_frameStarted was stuck true

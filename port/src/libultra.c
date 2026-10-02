@@ -286,6 +286,9 @@ static void gevrPollInjectedInput(void)
 {
 	static u32 sTick;
 	const char *path = "/sdcard/Android/data/com.gevr.port/files/gevr_input.txt";
+#ifdef GEVR_STEAM_FRAME
+	path = "gevr_input.txt";   /* the data folder (the working directory): ~/Documents/GoldenEye on the Frame */
+#endif
 	if (gevrInjectFrames > 0) {
 		if (--gevrInjectFrames == 0) gevrInjectTurn = 0.0f;
 		return;
