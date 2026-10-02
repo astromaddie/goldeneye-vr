@@ -24,6 +24,9 @@ android {
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
+        // True only in the "frame" build type (Valve Steam Frame, see docs/STEAM_FRAME.md)
+        buildConfigField "boolean", "STEAM_FRAME", "false"
+
         ndk {
             abiFilters 'arm64-v8a'
         }
@@ -71,6 +74,26 @@ android {
                 signingConfig signingConfigs.release
             }
             ndk { debugSymbolLevel 'SYMBOL_TABLE' }
+        }
+
+        // Valve Steam Frame (Lepton, Android 11): ./gradlew assembleFrame.
+        // Everything Frame-specific hangs off this build type so the Quest
+        // release/debug builds are untouched: the Khronos OpenXR loader instead
+        // of Meta's (CMake, GEVR_STEAM_FRAME), the manifest in src/frame, no
+        // GitHub self-updater, game data in /sdcard/Documents/GoldenEye.
+        frame {
+            initWith release
+            matchingFallbacks = ['release']
+            applicationIdSuffix ".frame"
+            versionNameSuffix "-frame"
+            // Sideloaded through adb/devkit, so the debug key is enough; no keystore needed.
+            signingConfig signingConfigs.debug
+            buildConfigField "boolean", "STEAM_FRAME", "true"
+            externalNativeBuild {
+                cmake {
+                    arguments "-DGEVR_STEAM_FRAME=ON"
+                }
+            }
         }
     }
 

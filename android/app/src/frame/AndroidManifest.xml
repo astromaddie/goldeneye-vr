@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Merged over src/main for the "frame" build type: the Valve Steam Frame, whose
+    Android container ("Lepton", Android 11) runs the app on SteamVR's OpenXR
+    runtime. What the Quest manifest declares and the Frame must not (or need not):
+    the Quest shell metadata, the GitHub self-updater's install permission, and the
+    high-performance VR feature flag (an install-time requirement the container may
+    not advertise).
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-feature
+        android:name="android.hardware.vr.highperformance"
+        tools:node="remove" />
+    <uses-feature
+        android:name="oculus.software.overlay_keyboard"
+        tools:node="remove" />
+
+    <!-- no self-update from GitHub on the Frame (UpdateChecker is not created) -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"
+        tools:node="remove" />
+
+    <!--
+        The ROM, settings and saves live in /sdcard/Documents/GoldenEye, which is the
+        headset's ~/Documents and survives Lepton resets. Android 11 needs all-files
+        access for that folder (tools/steam_frame/deploy.sh grants it with appops).
+    -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+
+    <application android:requestLegacyExternalStorage="true">
+        <meta-data
+            android:name="com.samsung.android.vr.application.mode"
+            tools:node="remove" />
+        <meta-data
+            android:name="com.oculus.supportedDevices"
+            tools:node="remove" />
+
+        <activity android:name=".MainActivity">
+            <meta-data
+                android:name="com.oculus.vr.focusaware"
+                tools:node="remove" />
+        </activity>
+    </application>
+</manifest>

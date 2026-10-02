@@ -70,3 +70,6 @@ scratchpad/
 keystore.properties
 *.jks
 *.keystore
+
+# Steam Frame build: downloaded Khronos OpenXR loader (cmake/khronos_loader.cmake)
+third_party/

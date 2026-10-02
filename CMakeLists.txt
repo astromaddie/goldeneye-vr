@@ -21,6 +21,9 @@ if (NOT EXISTS ${CMAKE_BINARY_DIR}/CMakeCache.txt)
 endif()
 
 # Options
+# Android only: package for the Valve Steam Frame (Lepton) instead of a Quest.
+# Set by the Gradle "frame" build type; see docs/STEAM_FRAME.md.
+option(GEVR_STEAM_FRAME "Build the Android app for the Valve Steam Frame" OFF)
 set(ROMID "ntsc-final" CACHE STRING "Which ROM to build for: ntsc-final")
 
 target_architecture(TARGET_ARCH)
@@ -203,7 +206,14 @@ else()
 endif()
 
 # OpenXR Loader
-if(ANDROID)
+if(ANDROID AND GEVR_STEAM_FRAME)
+  # Valve Steam Frame (Lepton container): no loader broker exists there, so the
+  # app ships the Khronos loader instead of Meta's. See cmake/khronos_loader.cmake.
+  include(khronos_loader)
+  message(STATUS "OpenXR: Using the Khronos Android loader (Steam Frame)")
+  add_library(openxr_loader SHARED IMPORTED)
+  set_target_properties(openxr_loader PROPERTIES IMPORTED_LOCATION "${GEVR_KHRONOS_LOADER_SO}")
+elseif(ANDROID)
   message(STATUS "OpenXR: Using bundled Quest Android loader")
   add_library(openxr_loader SHARED IMPORTED)
   set_target_properties(openxr_loader PROPERTIES
@@ -354,6 +364,9 @@ if(ANDROID)
   set_target_properties(steamaudio PROPERTIES IMPORTED_LOCATION "${CMAKE_SOURCE_DIR}/port/external/steamaudio/lib/android-armv8/libphonon.so")
   target_include_directories(gevr PRIVATE "${CMAKE_SOURCE_DIR}/port/external/steamaudio/include")
   target_compile_definitions(gevr PRIVATE GEVR_STEAMAUDIO=1)
+  if(GEVR_STEAM_FRAME)
+    target_compile_definitions(gevr PRIVATE GEVR_STEAM_FRAME=1)
+  endif()
   target_link_libraries(gevr ${LIBS} openxr_loader juice-static opus steamaudio)
   target_link_options(gevr PRIVATE -Wl,--error-limit=0)
 
