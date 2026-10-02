@@ -58,20 +58,27 @@ The ROM must be the US retail dump (SHA-1 `abe01e4aeb033b6c0836819f549c791b26cfd
 
 ## Unattended testing (nothing worn)
 
-A headset on a desk is in `SYNCHRONIZED` with `shouldRender=false`, so the launcher would wait
-for ever and the multiview path would never draw. Two Frame-only test switches (files in the
-data folder, set by `deploy.sh`):
+A headset on a desk is in `SYNCHRONIZED` with `shouldRender=false`, so the launcher would wait for
+ever and the multiview path would never draw. Frame-only test switches live in
+`~/Documents/GoldenEye/vr-diag.ini` (set with `deploy.sh --diag KEY=VAL`, listed with their effects in
+[VR_ARCHITECTURE.md](VR_ARCHITECTURE.md) section 6): `force_render`, `diag_yaw`, `dump_frame`,
+`dump_stereo_frame`, `boot_stage` (33 = Dam), `difficulty`, `autostart`, `timing`. With force_render the
+game draws from a synthetic head at 1.6 m with parked hands while the sim keeps running; `boot_stage`
+plus `autostart` land in a solo mission with no controller; the dumps are `vr-dumps/vr-eye0.bmp`,
+`vr-eye1.bmp`, `vr-hud.bmp` and `vr-state.txt`. Remove them (`--diag-reset`) before playing.
 
-- `--force-render` creates `gevr_force_render`: frames are drawn and submitted although the
-  runtime says not to. Remove it (`--no-force-render`) before playing.
-- `--autostart` writes `gevr_input.txt` (`1000 0 0 600`): the launcher's existing Start test
-  hook, read from the data folder here, so the game boots without a controller. It is consumed
-  on use.
+```bash
+tools/steam_frame/deploy.sh --clear-dumps --diag force_render=1 --diag autostart=1 --diag boot_stage=33 \
+    --diag dump_stereo_frame=480 --diag diag_yaw=90 --logcat 80 --pull-dumps scratchpad/dumps/yaw90
+tools/steam_frame/analyze_dump.py scratchpad/dumps/yaw90      # numbers for the stereo check (numpy, pillow)
+tools/steam_frame/tests/run_tests.sh                          # host tests: bindings, View state machine
+```
 
-`deploy.sh --logcat 40` captures the run to `scratchpad/frame-logcat.txt`. Evidence lines:
+`--logcat 40` captures the run to `scratchpad/frame-logcat.txt`. Evidence lines:
 `OpenXR Runtime:`, `Session created`, `Swapchain eye=0 ... arraySize=2 multiview=1`,
-`multiview FBO COMPLETE`, `Session state changed`, `[vr-frame]`, `rom: loaded ge.z64`,
-`pump: N retraces, M xr frames`.
+`multiview FBO COMPLETE`, `Session state changed`, `[vr-frame]`, `[vr-perf]`, `[vr-dump]`,
+`[VR_CTRL] xrSuggestInteractionProfileBindings`, `rom: loaded ge.z64`, `pump: N retraces, M xr frames`.
+`--input "1000 0 0 30"` queues the PC test hook (N64 button mask, stick, frames) once.
 
 ## Verified, and at which level
 
