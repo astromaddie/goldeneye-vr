@@ -1907,6 +1907,7 @@ static void vr_screen_face_head(void)
  * the next recentre (goldeneye-vr.ini).
  */
 extern "C" int gevrVrGripPosePlay(int hand, float pos[3], float quat[4]); // vr_input.cpp
+extern "C" int gevrVrPointerRayPlay(int hand, float pos[3], float dir[3]); // vr_input.cpp
 static bool g_screenGrabRebase = false;   // a stick resize moved it: grab on from there
 
 extern "C" void vr_screen_grab(int active)
@@ -2001,15 +2002,11 @@ static float g_ptrRawU[2], g_ptrRawV[2];
 
 static bool vr_screen_hit(int hand, float *u, float *v, float o[3])
 {
-    float q[4];
+    float dir[3];
     g_ptrMissReason[hand] = 1;
-    if (!g_screenPlaced || !g_screenVisible || g_screenW == 0 || !gevrVrGripPosePlay(hand, o, q)) {
+    if (!g_screenPlaced || !g_screenVisible || g_screenW == 0 || !gevrVrPointerRayPlay(hand, o, dir)) {
         return false;
     }
-    const float qx = q[0], qy = q[1], qz = q[2], qw = q[3];
-    const float dir[3] = { -2.0f * (qx * qy - qw * qz),
-                           -(1.0f - 2.0f * (qx * qx + qz * qz)),
-                           -2.0f * (qy * qz + qw * qx) };
     const float cy = cosf(g_screenYaw), sy = sinf(g_screenYaw);
     const float aspect = (float)g_screenW / (float)g_screenH;
 

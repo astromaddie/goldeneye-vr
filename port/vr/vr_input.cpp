@@ -129,6 +129,15 @@ XrAction gGripValueAction = XR_NULL_HANDLE;      // Analog grip value
 XrAction gHapticAction = XR_NULL_HANDLE;         // Haptic vibration
 // Steam Frame controllers (valve/frame_controller_valve), left View and the D-pad, both bumpers
 XrAction gViewAction = XR_NULL_HANDLE;           // View (left): the system layer's button
+#ifdef GEVR_STEAM_FRAME
+// The aim pose: the runtime's own pointing ray for each controller (-Z forward).
+// The laser pointer uses it on the Frame; the grip pose's -Y, which the Quest
+// build points with, was tuned on Touch and leaves the Frame controller at an
+// angle to where the hand points.
+XrAction gAimPoseAction = XR_NULL_HANDLE;
+static XrSpace gAimSpace[2] = {XR_NULL_HANDLE, XR_NULL_HANDLE};
+static XrPosef gAimPosePlay[2] = {};
+#endif
 XrAction gBumperAction = XR_NULL_HANDLE;         // Bumpers
 XrAction gDpadAction[4] = { XR_NULL_HANDLE, XR_NULL_HANDLE, XR_NULL_HANDLE, XR_NULL_HANDLE };  // up down left right
 bool gFrameProfile = false;                      // a Steam Frame controller is the active profile
@@ -191,6 +200,9 @@ XrResult create_vr_controllers_complete() {
 
     // 3. Create all actions
     XR_TRY(CreateAction(gPoseAction, "controller_pose", "Controller Pose", XR_ACTION_TYPE_POSE_INPUT));
+#ifdef GEVR_STEAM_FRAME
+    XR_TRY(CreateAction(gAimPoseAction, "aim_pose", "Aim Pose", XR_ACTION_TYPE_POSE_INPUT));
+#endif
     XR_TRY(CreateAction(gSelectAction, "select_button", "Select Button", XR_ACTION_TYPE_BOOLEAN_INPUT));
     XR_TRY(CreateAction(gGripAction, "grip_button", "Grip Button", XR_ACTION_TYPE_BOOLEAN_INPUT));
     XR_TRY(CreateAction(gMenuAction, "menu_button", "Menu Button", XR_ACTION_TYPE_BOOLEAN_INPUT));
@@ -253,6 +265,10 @@ XrResult create_vr_controllers_complete() {
     SuggestBindings("/interaction_profiles/khr/simple_controller", {
             {gPoseAction, "/user/hand/left/input/grip/pose"},
             {gPoseAction, "/user/hand/right/input/grip/pose"},
+#ifdef GEVR_STEAM_FRAME
+            {gAimPoseAction, "/user/hand/left/input/aim/pose"},
+            {gAimPoseAction, "/user/hand/right/input/aim/pose"},
+#endif
             {gSelectAction, "/user/hand/left/input/select/click"},
             {gSelectAction, "/user/hand/right/input/select/click"},
             {gMenuAction, "/user/hand/left/input/menu/click"},
@@ -266,6 +282,10 @@ XrResult create_vr_controllers_complete() {
             // Poses
             {gPoseAction, "/user/hand/left/input/grip/pose"},
             {gPoseAction, "/user/hand/right/input/grip/pose"},
+#ifdef GEVR_STEAM_FRAME
+            {gAimPoseAction, "/user/hand/left/input/aim/pose"},
+            {gAimPoseAction, "/user/hand/right/input/aim/pose"},
+#endif
 
             // Main buttons
             {gSelectAction, "/user/hand/left/input/trigger/value"},
@@ -304,6 +324,10 @@ XrResult create_vr_controllers_complete() {
             // Poses
             {gPoseAction, "/user/hand/left/input/grip/pose"},
             {gPoseAction, "/user/hand/right/input/grip/pose"},
+#ifdef GEVR_STEAM_FRAME
+            {gAimPoseAction, "/user/hand/left/input/aim/pose"},
+            {gAimPoseAction, "/user/hand/right/input/aim/pose"},
+#endif
 
             // Trigger / Grip
             {gSelectAction, "/user/hand/left/input/trigger/click"},
@@ -354,6 +378,10 @@ XrResult create_vr_controllers_complete() {
             // Poses
             {gPoseAction, "/user/hand/left/input/grip/pose"},
             {gPoseAction, "/user/hand/right/input/grip/pose"},
+#ifdef GEVR_STEAM_FRAME
+            {gAimPoseAction, "/user/hand/left/input/aim/pose"},
+            {gAimPoseAction, "/user/hand/right/input/aim/pose"},
+#endif
 
             // Buttons
             {gSelectAction, "/user/hand/left/input/trigger/click"},
@@ -383,6 +411,10 @@ XrResult create_vr_controllers_complete() {
             // Poses
             {gPoseAction, "/user/hand/left/input/grip/pose"},
             {gPoseAction, "/user/hand/right/input/grip/pose"},
+#ifdef GEVR_STEAM_FRAME
+            {gAimPoseAction, "/user/hand/left/input/aim/pose"},
+            {gAimPoseAction, "/user/hand/right/input/aim/pose"},
+#endif
 
             // Triggers / grip
             {gTriggerValueAction, "/user/hand/left/input/trigger/value"},
@@ -416,6 +448,10 @@ XrResult create_vr_controllers_complete() {
             // Poses
             {gPoseAction, "/user/hand/left/input/grip/pose"},
             {gPoseAction, "/user/hand/right/input/grip/pose"},
+#ifdef GEVR_STEAM_FRAME
+            {gAimPoseAction, "/user/hand/left/input/aim/pose"},
+            {gAimPoseAction, "/user/hand/right/input/aim/pose"},
+#endif
 
             // Buttons
             {gTriggerValueAction, "/user/hand/left/input/trigger/value"},
@@ -448,6 +484,10 @@ XrResult create_vr_controllers_complete() {
     SuggestBindings("/interaction_profiles/meta/touch_controller_plus", {
             {gPoseAction, "/user/hand/left/input/grip/pose"},
             {gPoseAction, "/user/hand/right/input/grip/pose"},
+#ifdef GEVR_STEAM_FRAME
+            {gAimPoseAction, "/user/hand/left/input/aim/pose"},
+            {gAimPoseAction, "/user/hand/right/input/aim/pose"},
+#endif
             {gTriggerValueAction, "/user/hand/left/input/trigger/value"},
             {gTriggerValueAction, "/user/hand/right/input/trigger/value"},
             {gGripValueAction, "/user/hand/left/input/squeeze/value"},
@@ -470,6 +510,10 @@ XrResult create_vr_controllers_complete() {
             // Poses
             {gPoseAction, "/user/hand/left/input/grip/pose"},
             {gPoseAction, "/user/hand/right/input/grip/pose"},
+#ifdef GEVR_STEAM_FRAME
+            {gAimPoseAction, "/user/hand/left/input/aim/pose"},
+            {gAimPoseAction, "/user/hand/right/input/aim/pose"},
+#endif
 
             // Triggers / Grip
             {gSelectAction, "/user/hand/left/input/trigger/value"},
@@ -511,6 +555,10 @@ XrResult create_vr_controllers_complete() {
         SuggestBindings("/interaction_profiles/valve/frame_controller_valve", {
                 {gPoseAction, "/user/hand/left/input/grip/pose"},
                 {gPoseAction, "/user/hand/right/input/grip/pose"},
+#ifdef GEVR_STEAM_FRAME
+                {gAimPoseAction, "/user/hand/left/input/aim/pose"},
+                {gAimPoseAction, "/user/hand/right/input/aim/pose"},
+#endif
 
                 {gSelectAction, "/user/hand/left/input/trigger/value"},
                 {gSelectAction, "/user/hand/right/input/trigger/value"},
@@ -564,6 +612,14 @@ XrResult create_vr_controllers_complete() {
 
     spaceInfo.subactionPath = subactionPaths[1]; // right
     XR_TRY(xrCreateActionSpace(g_vrState.session, &spaceInfo, &gControllerSpace[1]));
+#ifdef GEVR_STEAM_FRAME
+    spaceInfo.action = gAimPoseAction;
+    for (int h = 0; h < 2; h++) {
+        spaceInfo.subactionPath = subactionPaths[h];
+        XR_TRY(xrCreateActionSpace(g_vrState.session, &spaceInfo, &gAimSpace[h]));
+    }
+    spaceInfo.action = gPoseAction;
+#endif
 
     // 12. Initialize state structures
     for (int i = 0; i < 2; i++) {
@@ -685,6 +741,18 @@ XrResult update_vr_controllers(XrTime predicted_time) {
                 gCachedVelocityPlay[hand] = { XR_TYPE_SPACE_VELOCITY };
             }
         }
+#ifdef GEVR_STEAM_FRAME
+        // The aim pose in play space, for the laser pointer: kept through tracking loss like the grip.
+        if (gAimSpace[hand] != XR_NULL_HANDLE) {
+            XrSpaceLocation loc = { XR_TYPE_SPACE_LOCATION };
+            const XrResult res = xrLocateSpace(gAimSpace[hand], g_vrState.playSpace, predicted_time, &loc);
+            const XrSpaceLocationFlags f = loc.locationFlags;
+            if (XR_SUCCEEDED(res) && (f & XR_SPACE_LOCATION_POSITION_VALID_BIT) &&
+                (f & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) && (f & XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT)) {
+                gAimPosePlay[hand] = loc.pose;
+            }
+        }
+#endif
 
         // Actions bool
         XR_TRY(GetActionState(gSelectAction, handPath, state.select));
@@ -1887,6 +1955,40 @@ extern "C" int gevrVrGripPosePlay(int hand, float pos[3], float quat[4])
     quat[1] = q.y;
     quat[2] = q.z;
     quat[3] = q.w;
+    return 1;
+}
+
+/*
+ * The laser pointer's ray (vr_openxr.cpp vr_screen_hit): origin and pointing
+ * direction (unit, play space) of one controller by role. On the Frame it is the
+ * aim pose's -Z, the runtime's pointing ray for that controller; elsewhere, and
+ * until an aim pose has been tracked, the grip pose's -Y as the Quest build tuned it.
+ */
+extern "C" int gevrVrPointerRayPlay(int hand, float pos[3], float dir[3])
+{
+    float q[4];
+#ifdef GEVR_STEAM_FRAME
+    if (hand >= 0 && hand <= 1) {
+        const XrPosef& aim = gAimPosePlay[gevrPhysHand(hand)];
+        const XrQuaternionf& a = aim.orientation;
+        if (a.x != 0.0f || a.y != 0.0f || a.z != 0.0f || a.w != 0.0f) {
+            pos[0] = aim.position.x;
+            pos[1] = aim.position.y;
+            pos[2] = aim.position.z;
+            dir[0] = -2.0f * (a.x * a.z + a.w * a.y);
+            dir[1] = -2.0f * (a.y * a.z - a.w * a.x);
+            dir[2] = -(1.0f - 2.0f * (a.x * a.x + a.y * a.y));
+            return 1;
+        }
+    }
+#endif
+    if (!gevrVrGripPosePlay(hand, pos, q)) {
+        return 0;
+    }
+    const float qx = q[0], qy = q[1], qz = q[2], qw = q[3];
+    dir[0] = -2.0f * (qx * qy - qw * qz);
+    dir[1] = -(1.0f - 2.0f * (qx * qx + qz * qz));
+    dir[2] = -2.0f * (qy * qz + qw * qx);
     return 1;
 }
 

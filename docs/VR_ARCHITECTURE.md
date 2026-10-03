@@ -92,6 +92,11 @@ Not done on the Frame (no change from the Quest build): depth submission for rep
 
 ## 5. Input
 
+Poses: `grip/pose` places the guns, hands and the two-handed screen grab. On the Frame build the menu laser
+(launcher, front-end folders, virtual screen) is the `aim/pose` ray (-Z), the runtime's pointing ray for each
+controller, bound for every profile; until an aim pose has been tracked it falls back to the grip's -Y, which is
+what the Quest build uses (`gevrVrPointerRayPlay`, vr_input.cpp).
+
 Profiles suggested (the log prints each `xrSuggestInteractionProfileBindings` result):
 
 | Profile | Needs | Notes |
@@ -176,7 +181,8 @@ States: **played in headset**, **verified unattended**, **not started**.
 | Frame controls, D-pad, bumpers | not started (built, untested on device) |
 | System layer: View short/hold, recentre, height | host-tested state machine; not started on device |
 | Quit to Steam | built, not started on device |
-| Worn: scale, HUD distance, comfort, control labels | not started |
+| Menu laser pointer from the aim pose (Frame build) | built, not yet run on the device. Worn report 2026-10-03 on the first build: the pointer did not line up with the controller (it pointed along the grip pose's -Y, tuned on Touch) |
+| Worn: scale, HUD distance, comfort, control labels | first wear 2026-10-03 on the phase-1 build (no Frame profile): the menu pointer was off; nothing else reported yet |
 | Depth submission, foveation, HUD quad, roomscale acceptance, spatial audio | not started |
 
 Why "not yet run": after the commit of the diagnostics the Frame dropped off the network at about
