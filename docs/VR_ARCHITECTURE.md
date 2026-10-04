@@ -81,7 +81,7 @@ verified. "Dump" means the unattended eye dumps of section 8.
 | First-person gun, arms, casings | `bondview2.c` `gevrStereoGunMatrix`, `VR_CULL_OFF_*` tags | Placed from the grip pose in view space at the game frame's camera; redraw frames carry them with the hand (`gevrVrRedrawHandDelta`) | read; parked-hand dump |
 | World draws between ticks (even movement, smooth stairs) | `gfx_opengl.cpp` `gfx_vr_eye_live`, `gfx_vr_eye_replay` | The world's draws take the body's move to the frame's display time through the `uReproj` branch; hand-tagged draws keep their hand delta, screen-space HUD markers are skipped | host test of the matrix; not yet on the device |
 | Menus, cutscenes, intro/death cameras | `vr_screen.cpp`, `gevrStereoFrame` `want` | Not stereo: the screen quad, world-locked at 2.5 m | dump (`vr-hud.bmp`) |
-| The paused watch (Frame build) | `gevrVrWatchScreen`, `gevr_watch_backdrop` | Its own curved screen, world-locked 1.5 m ahead; behind it the last stereo frame replayed from the head's pose (`uReproj` 2: hand-held draws left out, screen-locked HUD dropped), dimmed | host test of the placement; not yet on the device |
+| The paused watch (Frame build) | `gevrVrWatchScreen`, `gevr_watch_backdrop` | Its own curved screen, world-locked 1.5 m ahead; behind it the last stereo frame replayed from the head's pose (`uReproj` 2: hand-held draws left out, screen-locked HUD dropped), dimmed | host test of the placement; verified unattended 2026-10-04 (flat quad: no cylinder layer offered) |
 | Effect billboards and hit sparks | `gunfire.c`, `explosion.c` | Hit spark 4 units off the wall, smoke 16 (the game's 26/100 floated) | read (STATUS.md) |
 | Fog | `bgfog.c`, `GEVR_FAR_EXTEND` | Far edge pushed out with the rooms | read |
 | Water, glass | `sky.c` `WaterConcavity` 0 in stereo | Floats through the pre-projected path; reflections in view space | read (issue #30) |
@@ -391,7 +391,7 @@ States: **played in headset**, **verified unattended**, **not started**.
 | Menu hold 1.5 s opens VR settings (no restart prompt on the Frame) | built, not yet run on the device |
 | Online Exit, idle kick: title screen and a note instead of a restart | built, not yet run on the device |
 | Settings loader: integer and decimal spellings of every key | host-tested (round trip of every key the VR settings change) |
-| Paused watch, option D: world-locked curved screen, frozen dimmed stereo world behind it | built, not yet run on the device (host-tested placement) |
+| Paused watch, option D: world-locked screen, frozen dimmed stereo world behind it | verified unattended 2026-10-04 (flat quad, as SteamVR offered no cylinder layer); not worn |
 | Menu laser pointer from the aim pose (Frame build) | built, not yet run on the device. Worn report 2026-10-03 on the first build: the pointer did not line up with the controller (it pointed along the grip pose's -Y, tuned on Touch) |
 | Worn: scale, HUD distance, comfort, control labels | first wear 2026-10-03 on the phase-1 build (no Frame profile): the menu pointer was off; nothing else reported yet |
 | Even movement: body drawn between ticks at display time, even walking speed, no run boost | verified unattended (2026-10-04, 90 Hz, Dam, `diag_walk`): `[vr-move]` steady-speed windows step a constant 5.67 cm a frame (sd 0.00) at 509 cm/s; 90 fps, 0 missed. Not worn |
