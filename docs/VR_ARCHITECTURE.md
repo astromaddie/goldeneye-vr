@@ -81,7 +81,8 @@ verified. "Dump" means the unattended eye dumps of section 8.
 | HUD, crosshair, messages | `VR_HUD_CAPTURE_*_H`/`_R` and `VR_WEAPON_PANEL_CAPTURE_*` tags, `gfx_opengl.cpp` `gevr_capture_target_ensure` | The crosshair stays in the eye pass. Health and armour, messages, subtitles, the countdown and prompts are captured (H) onto a head-locked quad layer, the ammo counter (R) onto a panel at the right hand, the weapon panel (P) onto its own. Each capture is a two-layer target attached as two views, the image in layer 0: a one-view target is invalid with the game's `num_views = 2` programs, and Mesa dropped every capture draw (all these quads were empty on the Frame until 2026-10-04) | verified unattended 2026-10-04 (`dump_hud`: `vr-hud-R.bmp` the PP7's counter, `vr-hud-H.bmp` the countdown; `diag_gl`: no GL error in any pass). The weapon panel's capture not dumped; not worn |
 | First-person gun, arms, casings | `bondview2.c` `gevrStereoGunMatrix`, `VR_CULL_OFF_*` tags | Placed from the grip pose in view space at the game frame's camera; redraw frames carry them with the hand (`gevrVrRedrawHandDelta`) | read; parked-hand dump |
 | World draws between ticks (even movement, smooth stairs) | `gfx_opengl.cpp` `gfx_vr_eye_live`, `gfx_vr_eye_replay` | The world's draws take the body's move to the frame's display time through the `uReproj` branch; hand-tagged draws keep their hand delta, screen-space HUD markers are skipped | host test of the matrix; not yet on the device |
-| Menus, cutscenes, intro/death cameras | `vr_screen.cpp`, `gevrStereoFrame` `want` | Not stereo: the screen quad, world-locked at 2.5 m | dump (`vr-hud.bmp`) |
+| Menus; cutscenes with `CutsceneMode=0` | `vr_screen.cpp`, `gevrStereoFrame` `want` | Not stereo: the screen quad, world-locked at 2.5 m | dump (`vr-hud.bmp`) |
+| Cutscenes on the 3D cinema (Frame build, `CutsceneMode=1`): intro flyby, swirl, death replay, mission-end cameras | `bondview2.c` `gevrCinemaFrame`, `vr_cinema.cpp`, the screen pass in `gfx_pc.cpp`, `uVrFlat 2` in `gfx_opengl.cpp` | The game's own camera drawn as two cameras 64 mm apart (world vertices only; the game's 2D stays at the screen plane); the head never drives the camera; a world-locked projection layer (section 4, "Cutscenes") | host test of the maths (`test_vr_cinema.c`); built, not yet run on the device |
 | The paused watch (Frame build) | `vr_watch_terminal.cpp`, the page pass in `gfx_pc.cpp`, `gevr_watch_backdrop` | Option C: its page alone, cropped to the watch face and rendered at panel resolution, on a world-locked quad 0.9 m ahead; behind it the last stereo frame replayed from the head's pose (`uReproj` 2: hand-held draws left out, screen-locked HUD dropped), dimmed | host tests of the placement, re-centre, dock, hit and crop; verified unattended 2026-10-04 (`dump_watch_frame` in Dam: the status page sharp on the 1024 x 648 panel, alone on black in its green frame; the frozen world dimmed in stereo behind it; the VR settings docked by the cheat hook, closed with B; START resumes). Not worn |
 | Sniper scope lens (and the laser's, the KF7/AR33 magnifier) | `gfx_opengl.cpp` `gfx_vr_scope_*`, `vr_openxr.cpp` scope layer | The world's draws kept from the eye pass, drawn again through the scope's camera into a 512² two-layer target attached as two views (the image is layer 0; the shader drops view 1), copied round into a quad layer on the gun. A one-view target is invalid with the game's `num_views = 2` programs: Mesa drops every draw (the lens was black on the Frame), Quest's driver let it pass | verified unattended 2026-10-04 (`dump_scope` in Dam: the target holds the zoomed world, no GL error; the same draw into a one-view target is 0x502); not worn |
 | Effect billboards and hit sparks | `gunfire.c`, `explosion.c` | Hit spark 4 units off the wall, smoke 16 (the game's 26/100 floated) | read (STATUS.md) |
@@ -165,6 +166,77 @@ against 1.1-1.5 units for the latest tick alone), the cuts, the stairs follow (s
 111 ms each, no overshoot, a 2 m drop followed within 2 units and landing without a dip), the sway and
 bob (zero at strength 0, zero once still), the draw move against a rotated, moved camera, and the gait
 learner (same distance, even speed).
+
+### Cutscenes: the 3D cinema (Frame build; `CutsceneMode`, standard key `cutscenes`)
+
+The user asked for it on 2026-10-04: cutscenes on a 3D cinema screen with stereo depth, like the GTA
+ports, so nothing goes wrong when you look around but it still feels like VR. Standard section 4,
+"Cutscenes" and "Transitions"; lessons 45, 48, 71 and 72.
+
+**What GoldenEye's cutscenes are.** All of them are the game's scripted cameras, `g_CameraMode`
+other than first person: the mission intro flyby (`CAMERAMODE_INTRO`, the `stage: intro cams=N`
+cameras; `intro-mode: 0 -> 1` in the log), the fade and swirl round into Bond (`FADESWIRL`,
+`SWIRL`), the death replay (`DEATH_CAM_SP`) and the mission-end cameras the AI scripts cut to
+(`POSEND`: the Dam's bungee jump, the Train, Cradle...). There are no letterboxed camera shots during
+play: play is `CAMERAMODE_FP` throughout, so there is nothing else to route. Before this they all
+went flat to the virtual screen, so the choice is **3D cinema** (default) or **Flat** (as before);
+there was no head-tracked "immersive" version to keep.
+
+**Routing.** `bondview2.c` `gevrCinemaFrame`, once a game frame, puts those camera modes through a
+latch (`vr_cinema_math.c` `gevrCinemaLatchStep`, lesson 71): on at the first frame, off at once when
+play (`FP`), stereo or the end of the level takes over, otherwise only after 12 quiet frames, so a
+hand-over through `CAMERAMODE_NONE` cannot bounce the view. On the cinema when `CutsceneMode=1`,
+single player, offline, the VR settings closed and no watch; otherwise flat, and the log says why
+once per cutscene (`[vr] cinema 3D: cutscene held flat (...)` with every condition, lesson 48).
+Multiplayer keeps the old path.
+
+**The stereo pair.** The frame goes through the usual screen pass (`gfx_pc.cpp`) into the virtual
+screen's two-layer target, but with per-eye offsets: `gevrCinemaShear` gives the shader (`uVrFlat`
+2) `x' = x - ex - ey w` on world vertices, `ex = tx P00`, `ey = -tx P00 / C`, `tx = -/+ 32 mm` in
+view units (`GEVR_UNITS_PER_METRE x D_800364CC`), `C` = 3 m. That is exactly two cameras 64 mm apart
+along the game camera's right axis whose off-axis windows meet 3 m ahead (the host test checks it
+against two real cameras). The CPU clip and backface tests take the same offsets
+(`vr_set_cull_offsets`). The game's 2D (w = 1: its fades, letterbox, credits) stays at the screen
+plane in both eyes. Layer 0 is the left eye's picture, layer 1 the right's. The far field parts by
+`W P00 sep / C` on the screen: 42 mm for GoldenEye's 60-degree 4:3 camera, about 9 m away for a
+64 mm IPD; a zoomed camera is held to 0.75 x IPD so the eyes never diverge (logged when it happens).
+The sky's cloud and water polygons carry their real w and get depth; the plain sky fill is 2D.
+
+**The screen and the projection layer.** World-locked, placed at the head's yaw when the cutscene
+starts (the first XR frame with its picture) and again on a recentre: 3.0 m ahead, the 4:3 picture
+3.0 x 2.25 m (53 x 41 degrees; Halo's 3.6 m is 16:9) with its centre 10 cm below the eyes, and a
+black band 0.45 m deep under it. Because SteamVR on the Frame shows per-eye quads to both eyes
+(lesson 45) it is submitted as a projection layer (`gevrCinemaLayer`), rebuilt every XR frame from
+that frame's eye poses: per eye, pose = (the screen's orientation, the eye's position) and fov =
+`atan2` of the screen's corners in the screen's frame, so each eye's image lands on the same
+rectangle in the room. The swapchain is 2 layers, the picture's width by picture plus band
+(`1920 x 1728` at the default resolution). The transparent eye layer still goes on top, so a
+projection layer is always there behind it (lesson 56); the virtual screen's quad is not submitted.
+
+**Bottom messages.** `hudmsgBottomRender` in a cinema frame centres the message in the screen's
+bottom fifth inside `VR_CINEMA_BAND_*` tags; the pass switches those draws to a two-view band target
+of the picture's width and a fifth of its height (`gevrCinemaBand`), which lands below the picture,
+flat, the same in both eyes (lesson 72). The text never rolls with the head: it is on the screen.
+The upper text window and the end credits stay in the picture at the screen plane.
+
+**Transitions.** Every change into or out of a cutscene (cinema or flat) fades from black: a
+head-locked black quad in view space, over every other layer, opaque for 0.25 s and then fading out
+over 0.35 s (`gevrCinemaFadeLayer`; its 16 x 16 swapchain is rewritten as the alpha changes).
+
+**Unattended check (coordinator).** `vr-diag.ini`: `force_render=1`, `autostart=1`,
+`boot_stage=33` (Dam: its intro flyby plays at the start), `dump_cinema_frame=90`, `diag_gl=1`.
+Expect `intro-mode: 0 -> 1`, `[vr] cinema 3D: cutscene #1 starts (camera mode 1, 20.0 view units
+per metre)`, `[vr] cinema 3D: swapchain WxH, two layers (...)`, `[vr] cinema 3D: band target ...`,
+`[vr] cinema 3D: screen placed yaw=0.0 dist=3.00 width=3.00 sep=64mm aspect=1.333 (...)`,
+`[vr-dump] armed for the 3D cinema`, `[vr-dump] cinema: vr-cinema0.bmp/vr-cinema1.bmp ...`,
+`[vr-dump] wrote vr-dumps/vr-eye0.bmp, ...`, `[vr-cinema] cutscene #1 ... layer=projection ...`
+every 180 XR frames, then `[vr] cinema 3D: cutscene #1 ends after N game frames (back to play)` and
+`stereo: on`, and no `[vr-gl]` error in "the 3D cinema pass". `vr-cinema0.bmp` and
+`vr-cinema1.bmp`: the flyby in the top 1440 rows, black underneath (a message if one shows), and the
+two images differing by horizontal parallax (about 27 px for the far hills, none at 3 m in the
+game). `vr-eye0/1.bmp` hold only the cleared eye layer. With `CutsceneMode=0` the same run logs
+`held flat` and shows the old screen (`vr-hud.bmp`). `cinema_sep_mm=N` changes the separation
+without a rebuild.
 
 ## 5. Input
 
@@ -414,6 +486,8 @@ Settings...** at the bottom of the watch's Game Options page (`options.c`; A on 
 | `dump_scope` | on the Nth game frame that draws a scope: `vr-dumps/vr-scope.bmp` (the scope target's layer 0), `vr-scope-lens.bmp` (the round lens image as handed to the compositor) and `vr-scope.txt` (target and status, view count, draws kept and in view, the pass's GL error, the same draw's error into a one-view target, camera sanity, the copy and the layer as submitted). Give the rifle with `gevr_cheat.txt` `hold17`; force_render's parked gun hand is enough. In Dam the game goes back to the PP7 about 0.7 s later, so keep N under about 30 (10 works) |
 | `diag_gl` | `[vr-gl]`: `glGetError` before and after every game draw and at the end of each pass (screen pass, eye pass, scope, vignette, hub, the layer copies, the in-between redraw), the target named (eye pass, screen pass, capture L/R/H/P); the first error at each place is logged at once with the bound target's view count, then counts every 300 game frames (`no GL errors` when clean). It takes the errors it reads, so `vr-scope.txt`'s `gl_error_before` reads 0 with it on |
 | `dump_hud` | on the Nth XR frame that copies a HUD capture to its quad layer: `vr-dumps/vr-hud-L/R/H/P.bmp`, each capture copied that frame (layer 0 of its target, the swapchain's size) |
+| `dump_cinema_frame` | the `dump_frame` files N XR frames after the 3D cinema is placed (a cutscene starts; `boot_stage=33` plays Dam's intro), with `vr-cinema0.bmp` and `vr-cinema1.bmp`: the two eye images as the compositor gets them (picture over the band) |
+| `cinema_sep_mm` | the 3D cinema's camera separation in mm; 0 or absent = 64 |
 
 `[vr-move]` every 2 s while the stereo camera moves: `step_cm mean/max/sd` (the shown camera's
 step per display frame, the head's own motion not included; with even movement the sd should be near
@@ -425,7 +499,8 @@ range of the between-ticks fraction; `1.00..1.00` when even movement is off), `c
 the multiview pass as both `eye=` values, `gpu=` ms when `timing` is on, `missed` (a frame over 1.5 display
 periods), then `wait=` and `period=`. Other markers: `[vr-frame]`, `[vr-sys]`, `[vr-dump]`, `[vr-diag]`,
 `[VR_CTRL]`, `stereo:`, `[vr] watch terminal ...` (`up`, `placed`, `page=`, `re-centring`, `settled`,
-`re-placed`, `VR settings docked`, `down`), `[vr] watch screen placed` (option D), `[vr] paused world:`.
+`re-placed`, `VR settings docked`, `down`), `[vr] watch screen placed` (option D), `[vr] paused world:`,
+`[vr] cinema 3D: ...` (`cutscene #n starts`, `screen placed`, `held flat`, `ends`) and `[vr-cinema]`.
 
 ## 7. Settings key map (the port's `goldeneye-vr.ini` names to the standard's)
 
@@ -448,8 +523,9 @@ and the docs use. Keys not listed have no standard counterpart.
 | `smooth_stairs` | `SmoothStairs` | 0/1; Frame default 1, Quest 0 (port-specific) |
 | `sway_strength` | `SwayStrength` | 0..1, 0 = off (default); experimental, port-specific |
 | `watch_style` | `WatchStyle` | `terminal` = 1 (Frame default: option C, the Q-Branch terminal), `screen` = 0 (option D, the big screen); read as the watch opens; the Quest build ignores it (port-specific) |
+| `cutscenes` | `CutsceneMode` | `cinema_3d` = 1 (Frame default), `flat` = 0 (the virtual screen, as before; this port had no head-tracked cutscene view to call immersive); VR settings, DISPLAY > Cutscenes; read each game frame, so it applies from the next cutscene frame; the Quest build ignores it |
 | `camera_shake` | none | the game's head bob and sway are off in stereo; `SwayStrength` is an opt-in experiment |
-| `force_render`, `diag_yaw`, `dump_frame`, `timing`, `diag_walk`, `diag_turn`, `dump_watch_frame`, `watch_backdrop`, `dump_scope`, `diag_gl`, `dump_hud` | `vr-diag.ini` | not in the game's ini |
+| `force_render`, `diag_yaw`, `dump_frame`, `timing`, `diag_walk`, `diag_turn`, `dump_watch_frame`, `watch_backdrop`, `dump_scope`, `diag_gl`, `dump_hud`, `dump_cinema_frame`, `cinema_sep_mm` | `vr-diag.ini` | not in the game's ini |
 
 ## 8. Status
 
@@ -476,6 +552,7 @@ States: **played in headset**, **verified unattended**, **not started**.
 | Paused watch: VR settings docked right of the terminal, laser on the dock | docking verified unattended 2026-10-04 (the `vrsettings` cheat over the paused watch: dock swapchain 1280 x 960 placed right of the terminal, B closes and saves); the laser on it not checked |
 | Paused watch: Menu opens it the gesture's way (stereo, fast); fast close | built, not yet run on the device |
 | `WatchStyle` setting (terminal / big screen) | built, not yet run on the device (round-tripped in the settings test) |
+| Cutscenes on the 3D cinema (projection layer, 64 mm, band, fades) and the `CutsceneMode` setting | built, not yet run on the device (maths host-tested in `test_vr_cinema.c`; the setting round-tripped in the settings test) |
 | Paused watch, option D (now `WatchStyle=0`): world-locked screen, frozen dimmed stereo world behind it | verified unattended 2026-10-04 (flat quad, as SteamVR offered no cylinder layer); not worn |
 | Menu laser pointer from the aim pose (Frame build) | built, not yet run on the device. Worn report 2026-10-03 on the first build: the pointer did not line up with the controller (it pointed along the grip pose's -Y, tuned on Touch) |
 | Worn: scale, HUD distance, comfort, control labels | first wear 2026-10-03 on the phase-1 build (no Frame profile): the menu pointer was off; nothing else reported yet |
@@ -510,8 +587,9 @@ file is removed if you ask for `--diag-reset`).
 4. HUD and aim (1 min): is the ammo/health readable at its distance? Point at something with the
    controller held naturally: do the gun's barrel, the crosshair and the shots go where your hand
    points (wear feedback 2026-10-04: they were 30-45 degrees low)?
-5. Cutscene (1 min): the intro and a mission-end cutscene on the virtual screen: distance, size,
-   comfort.
+5. Cutscene (1 min): the intro and a mission-end cutscene on the 3D cinema: does the picture have
+   depth (not flat), is 3 m and 3 x 2.25 m right, is the depth comfortable, is the fade from black
+   at the start and end OK? Then VR settings > DISPLAY > Cutscenes: Flat, and compare.
 6. Pause/watch and VR settings (2 min): R Menu (or the wrist raise) opens the watch: the Q-Branch
    terminal beams out of the watch and lands just ahead, a little low, with Dam dimmed behind it in
    stereo. Is the page sharp and readable at its size? Comfortable height and tilt seated and
