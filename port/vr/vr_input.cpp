@@ -19,6 +19,8 @@
 #include "vr_log.h"
 #include "vr_openxr.h"
 #include "vr_aim_math.h"
+#include "gevr_scope.h"
+#include "vr_diag.h"
 
 
 #ifdef ANDROID
@@ -2355,14 +2357,37 @@ extern "C" void gevrVrDiagParkHands(const float headPos[3], const float headQuat
     static const float kRestPos[2][3] = { { -0.17f, -0.28f, -0.36f }, { 0.17f, -0.28f, -0.36f } };
     const XrQuaternionf rest = { 0.70710678f, 0.0f, 0.0f, 0.70710678f };
     const XrQuaternionf hq = { headQuat[0], headQuat[1], headQuat[2], headQuat[3] };
+    float restPos[2][3];
+    memcpy(restPos, kRestPos, sizeof(restPos));
+    {
+        // vr-diag.ini diag_aim: the gun hand (controller 1) raised so the scope's eyepiece sits
+        // diag_aim cm ahead of the left eye (64 mm IPD: x -0.032), on its line of sight. The
+        // lens's offset from the grip is the game's (bondview2.c gevrScopeLensPlace), taken
+        // along the view's axes: the parked grip's gun points ahead with its up the view's up.
+        const float d = gevrDiag()->diag_aim / 100.0f;
+        if (d > 0.0f) {
+            const float *lens = gevrScope[0].lens;
+            const bool known = lens[3] > 0.0f;
+            const float side = known ? lens[0] : 0.016f, up = known ? lens[1] : 0.127f, back = known ? lens[2] : 0.105f;
+            restPos[1][0] = -0.032f - side;
+            restPos[1][1] = -up;
+            restPos[1][2] = -d - back;
+            static int logged;
+            if (!logged || (known && logged == 1)) {
+                logged = known ? 2 : 1;
+                vr_log("[vr-diag] diag_aim: gun hand at (%.3f %.3f %.3f) m, the eyepiece %.0f cm ahead of the left eye%s",
+                       restPos[1][0], restPos[1][1], restPos[1][2], d * 100.0f, known ? "" : " (default lens offset)");
+            }
+        }
+    }
     for (int h = 0; h < 2; h++) {
         ControllerInputState& st = gControllerStates[h];
         st.is_active = false;
-        st.controller_pose.position = { kRestPos[h][0], kRestPos[h][1], kRestPos[h][2] };
+        st.controller_pose.position = { restPos[h][0], restPos[h][1], restPos[h][2] };
         st.controller_pose.orientation = rest;
         // play = head * view
         const float qx = hq.x, qy = hq.y, qz = hq.z, qw = hq.w;
-        const float vx = kRestPos[h][0], vy = kRestPos[h][1], vz = kRestPos[h][2];
+        const float vx = restPos[h][0], vy = restPos[h][1], vz = restPos[h][2];
         const float tx = 2.0f * (qy * vz - qz * vy);
         const float ty = 2.0f * (qz * vx - qx * vz);
         const float tz = 2.0f * (qx * vy - qy * vx);

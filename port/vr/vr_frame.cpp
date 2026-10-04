@@ -209,6 +209,11 @@ extern "C" void vrFrameScopeDumpTarget(int hand, unsigned tex, int layer, int w,
     scope_txt("w", line);
     s_scopeDumpStage = 1;
     s_scopeDumpHand = hand;
+    /* with diag_aim the eyes too, this frame (the scope pass comes before the eye pass ends):
+     * the rifle's eyepiece as drawn, to hold the lens layer (vr-scope.txt) against */
+    if (gevrDiag()->diag_aim > 0.0f && !s_dumpDone) {
+        s_dumpActive = true;
+    }
 }
 
 extern "C" int vrFrameScopeLensDue(int hand)

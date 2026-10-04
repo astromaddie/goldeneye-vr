@@ -37,6 +37,10 @@ typedef struct GevrDiag {
                                   it named (first time at once, then counts every 300 game frames), 0 = off */
     int   dump_hud;            /* on the Nth game frame that submits a HUD capture: vr-dumps/vr-hud-L/R/H/P.bmp (the
                                   captures' images as copied to their quad layers), 0 = off */
+    float diag_aim;            /* force_render: the gun hand raised so the scope's eyepiece is this many cm ahead of the
+                                  left eye, on its line of sight (dump_scope then dumps the eyes too), 0 = parked */
+    float render_scale;        /* this run's eye resolution scale instead of the ini's RenderScale, 0 = the ini's */
+    int   msaa;                /* this run's eye MSAA samples (1, 2, 4) instead of the ini's EyeMsaa, 0 = the ini's */
 } GevrDiag;
 
 /* The settings; the file is read on the first call. Never NULL. */

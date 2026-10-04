@@ -46,6 +46,9 @@ static void apply(const char *key, const char *val)
     else if (!strcmp(key, "dump_scope")) s_diag.dump_scope = atoi(val);
     else if (!strcmp(key, "diag_gl")) s_diag.diag_gl = parse_bool(val);
     else if (!strcmp(key, "dump_hud")) s_diag.dump_hud = atoi(val);
+    else if (!strcmp(key, "diag_aim")) s_diag.diag_aim = (float)atof(val);
+    else if (!strcmp(key, "render_scale")) s_diag.render_scale = (float)atof(val);
+    else if (!strcmp(key, "msaa")) s_diag.msaa = atoi(val);
     else DIAG_LOG("[vr-diag] unknown key '%s'", key);
 }
 
@@ -86,11 +89,13 @@ static void load(void)
     }
     DIAG_LOG("[vr-diag] vr-diag.ini %s: force_render=%d diag_yaw=%.1f dump_frame=%d dump_stereo_frame=%d "
              "boot_stage=%d difficulty=%d timing=%d autostart=%d exit_after_s=%.0f one_shot=%d refresh_rate=%d "
-             "diag_walk=%d diag_turn=%.0f dump_watch_frame=%d watch_backdrop=%d dump_scope=%d diag_gl=%d dump_hud=%d",
+             "diag_walk=%d diag_turn=%.0f dump_watch_frame=%d watch_backdrop=%d dump_scope=%d diag_gl=%d dump_hud=%d "
+             "diag_aim=%.0f render_scale=%.2f msaa=%d",
              s_diag.present ? "read" : "absent", s_diag.force_render, s_diag.diag_yaw, s_diag.dump_frame,
              s_diag.dump_stereo_frame, s_diag.boot_stage, s_diag.difficulty, s_diag.timing, s_diag.autostart,
              s_diag.exit_after_s, s_diag.one_shot, s_diag.refresh_rate, s_diag.diag_walk, s_diag.diag_turn,
-             s_diag.dump_watch_frame, s_diag.watch_backdrop, s_diag.dump_scope, s_diag.diag_gl, s_diag.dump_hud);
+             s_diag.dump_watch_frame, s_diag.watch_backdrop, s_diag.dump_scope, s_diag.diag_gl, s_diag.dump_hud,
+             s_diag.diag_aim, s_diag.render_scale, s_diag.msaa);
 }
 
 const GevrDiag *gevrDiag(void)

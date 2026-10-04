@@ -3728,8 +3728,15 @@ s32 gevrStereoAimTarget(struct coord3d *target)
  * 0.1 (its model scale) cm a unit with its origin GEVR_GRIP_TO_ORIGIN_CM
  * behind the fist (gevrStereoGunMatrix), so the lens is placed the same way
  * and follows the grip trims, the gun size cheats and the left-handed mirror.
- * It shows at twice the eyepiece's size (user: easier to use than a true
- * one); the zoom stays the game's.
+ * The lens is the eyepiece's own size: the circle inside its end cap (re-
+ * measured from the ROM 2026-10-04 with tools/gevr_model_export.py: the cap
+ * at z -128 is an octagon round a centre vertex, texture 0x856, its corners
+ * 23.5 out and its flats 21.7). Every scope's lens is the circle inside its
+ * eyepiece face, which a round lens fills without poking past it. It was
+ * shown at twice the corners' size for a while (an earlier "easier to use"),
+ * which the user then found about twice the scope's viewfinder. The
+ * magnification does not depend on it: the view across the lens follows the
+ * lens's angle (lensTan), so a smaller lens shows a narrower view.
  *
  * The sight in the scope is the game's own red one (gunfire.c gunDrawSight,
  * drawn for the scope only), at the aim point - the scope's centre - and a
@@ -3750,7 +3757,7 @@ static f32 s_gevrScopeK = 1.0f;    /* the N64's own zoomed view (gevr_scope.txt 
 #define GEVR_SCOPE_FLAT_FOVY 60.0f /* the N64's normal view (player.c), the zoom's 1x */
 
 #define GEVR_SCOPE_NEAR_M       0.05f
-#define GEVR_SCOPE_LENS_SCALE   2.0f
+#define GEVR_SCOPE_LENS_SCALE   1.0f   /* the lens over the eyepiece's measured size (above) */
 /*
  * Each scope's eyepiece, model units, raw vertex coordinates as the sniper's
  * above (measured from the ROM), and its zoom.
@@ -3760,7 +3767,8 @@ static f32 s_gevrScopeK = 1.0f;    /* the N64's own zoomed view (gevr_scope.txt 
  * it (laser_stats Zoom 0). 3x, 21.8 degrees - the rifles' 2.2x was a bit
  * little (user). Its eyepiece is the rear face of the sight's housing in
  * GlaserZ (display list node 0x2ac: x -18..18, y 84..116, z -80..-37, on the
- * tube 0x294 at y 91..109).
+ * tube 0x294 at y 91..109): a hexagon round (0, 100) at z -80, its corners
+ * 18 out and its flats 15.6, so a lens of radius 16.
  *
  * The rifles that zoom when aiming on the N64 - the KF7 (ak47_stats Zoom 30,
  * 2.2x) and the AR33 (m16_stats Zoom 20, 3.3x) - zoomed the whole screen; a
@@ -3771,7 +3779,9 @@ static f32 s_gevrScopeK = 1.0f;    /* the N64's own zoomed view (gevr_scope.txt 
  * single distance flickered at its edge, HANDOFF 105). KF7 (Gak47Z): the
  * receiver's top, y 79, back to z -44; front sight post y 80 at z 600..627.
  * AR33 (Gm16Z): the carry handle's rear sight housing, x -10..11, y 100..154,
- * z -5..70; front sight y 154 at z 634..677.
+ * z -5..70; front sight y 154 at z 634..677. Having no lens on the model,
+ * their magnifier keeps the laser's eyepiece size, radius 16, about the rear
+ * sight's own width.
  */
 #define GEVR_SCOPE_NEAR_SHOW_M  0.15f
 #define GEVR_SCOPE_NEAR_HIDE_M  0.20f
@@ -3785,7 +3795,7 @@ struct GevrScope
 };
 
 static const struct GevrScope s_gevrScopes[] = {
-    { ITEM_SNIPERRIFLE, 13.5f, 126.5f, -128.0f, 23.5f, FALSE },   /* node 0x27c's end ring */
+    { ITEM_SNIPERRIFLE, 13.5f, 126.5f, -128.0f, 21.7f, FALSE },   /* node 0x27c's end cap, inside its flats */
     { ITEM_LASER,        0.0f, 100.0f,  -80.0f, 16.0f, FALSE },
     { ITEM_AK47,         0.0f,  80.0f,  -44.0f, 16.0f, TRUE },
     { ITEM_M16,          0.5f, 140.0f,   -5.0f, 16.0f, TRUE },
@@ -3915,7 +3925,11 @@ static void gevrScopeTune(void)
     {
         return;
     }
+#ifdef GEVR_STEAM_FRAME
+    f = fopen("gevr_scope.txt", "r");   /* the data folder: ~/Documents/GoldenEye on the Frame */
+#else
     f = fopen("/sdcard/Android/data/com.gevr.port/files/gevr_scope.txt", "r");
+#endif
     if (f == NULL)
     {
         return;
