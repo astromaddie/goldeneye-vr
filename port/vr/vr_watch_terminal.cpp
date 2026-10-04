@@ -332,7 +332,7 @@ extern "C" int gevrTermDockPresent(unsigned srcTex2d, int w, int h)
     }
     if (!term_copy(s_chain[1],
                    [&] { glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, (GLuint)srcTex2d, 0); },
-                   w, h, false, "vr-dock.bmp")) {
+                   w, h, false, nullptr)) {   // the dump's panel is vr-watch.bmp only
         return 0;
     }
     if (s_xrFrames - s_dockLastXr >= 12) {

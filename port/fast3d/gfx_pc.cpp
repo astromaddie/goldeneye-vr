@@ -233,7 +233,7 @@ static bool gevr_watch_backdrop(void)
  * (bondview2.c tags draw_watch_current_page, VR_WATCH_PAGE_*) is skipped - the world, the arm, the
  * bezel, the HUD - and every viewport, scissor and rectangle is cropped to the watch face: the
  * rectangle the game's own LCD draw covered (options.c tags draw_background_health_and_armor,
- * VR_WATCH_LCD_*), measured in native pixels from its triangles a frame before. Text, the green
+ * VR_WATCH_LCD_*), measured in native pixels from its triangles on the first page frame of an open. Text, the green
  * backdrop, the health and armour bars, the page tabs and the 3D item or controller all go through
  * the same crop, so the page is the game's own, just with more pixels on it.
  */
@@ -4809,7 +4809,11 @@ extern "C" void gfx_run(Gfx* commands) {
 #ifdef GEVR_STEAM_FRAME
             if (termPass) {
                 s_termPass = s_termCropOn = s_termInPage = s_termInLcd = false;
-                if (termCapture && s_termBox[2] > s_termBox[0] && s_termBox[3] > s_termBox[1]) {
+                // the face at rest, measured once per open and then kept: a page turn's zoom
+                // (trigger_watch_zoom) then plays inside the panel as in the game, and a box
+                // squashed by it can never replace a good one
+                if (termCapture && !s_termLastValid && s_termBox[2] - s_termBox[0] >= 0.25f * SCREEN_WIDTH
+                    && s_termBox[3] - s_termBox[1] >= 0.25f * SCREEN_HEIGHT) {
                     memcpy(s_termLastBox, s_termBox, sizeof(s_termLastBox));
                     s_termLastValid = true;
                 }

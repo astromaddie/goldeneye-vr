@@ -4045,6 +4045,7 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
         ? reinterpret_cast<const XrCompositionLayerBaseHeader*>(&screenCyl)
         : reinterpret_cast<const XrCompositionLayerBaseHeader*>(&screenLayer);
     if (termUnder) {
+        if (submitScreen) layers[numLayers++] = screenHdr;   // the panel closing over a menu on the screen
         for (int i = 0; i < nTerm; i++) layers[numLayers++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&termLayers[i]);
         layer.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
         layers[numLayers++] = reinterpret_cast<const XrCompositionLayerBaseHeader *>(&layer);

@@ -262,7 +262,8 @@ placement math in `vr_screen_math.c` (host-tested in `test_vr_screen.c`), the pa
   arm, bezel, HUD - and every viewport, scissor and rectangle is mapped through a crop of the native
   frame onto the target. The crop is the rectangle the game's own LCD draw covered
   (`draw_background_health_and_armor`, tagged `VR_WATCH_LCD_*`, measured from its triangles in
-  native pixels the frame before), plus 3%, widened to the panel's aspect (`gevrTermCrop`). Text,
+  native pixels on the first page frame and kept for the open, so a page turn's zoom plays inside
+  the panel as in the game), plus 3%, widened to the panel's aspect (`gevrTermCrop`). Text,
   the green backdrop, the health and armour bars, the page tabs, the 3D item (inventory) or
   controller (control options) all go through the same crop, so every page is the game's, with
   about 7x the pixels the N64 gave it and nothing around it. It is filtered down (linear blit) into

@@ -508,7 +508,7 @@ static s32 gevrWatchOpeningByGesture(s32 inlevel)
          * a quarter second after the press instead of after the arm and zoom on a screen. Its
          * closing runs as fast, over the paused world, while the panel shrinks back into the watch.
          */
-        if (gevrVrWatchTerminalStyle())
+        if (gevrVrWatchTerminalStyle() && VrPlayMode != 0)
         {
             opening = st >= 1 && st <= 4;
         }
