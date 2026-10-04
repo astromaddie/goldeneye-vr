@@ -18,3 +18,8 @@ done
     -I"$here/fake" -I"$root/OpenXR/Include" -I"$root/third_party/sfvr/include" \
     "$here/test_vr_system.cpp" "$root/port/vr/vr_system.cpp" "$out"/sfvr_view.c.o -o "$out/test_vr_system"
 "$out/test_vr_system"
+
+# comfort locomotion's math (port/vr/vr_motion_math.c), the production functions
+"$cc" -std=c11 -Wall -Wextra -Werror -I"$root/port/vr" \
+    "$here/test_vr_motion.c" "$root/port/vr/vr_motion_math.c" -lm -o "$out/test_vr_motion"
+"$out/test_vr_motion"
