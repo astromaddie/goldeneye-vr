@@ -99,6 +99,13 @@ bool gForceFlatShaderForMenu = false;
 // passes clip positions through untouched, so the frame is the game's own
 // flat image (see port/vr/vr_screen.h).
 bool gVrFlatPass = false;
+// Steam Frame 3D cinema (port/vr/vr_cinema.h): this flat pass draws the world as two cameras,
+// the per-eye offsets applied to world vertices only (the shader's uVrFlat 2).
+bool gVrCinemaPass = false;
+static inline int gevr_flat_uniform(void)
+{
+    return gVrFlatPass ? (gVrCinemaPass && !gForceFlatShaderForMenu ? 2 : 1) : 0;
+}
 static GLint gCurVrFlatLoc = -1;
 static GLint gCurIsMenuLoc = -1;
 static GLint gCurDecalBiasLoc = -1;
@@ -856,7 +863,7 @@ static void gfx_opengl_set_uniforms(struct ShaderProgram* prg) {
             glUniform1i(prg->IsTitleLegal, VrIsTitleLegal ? 1 : 0);
 
         if (prg->vrFlatLocation >= 0)
-            glUniform1i(prg->vrFlatLocation, gVrFlatPass ? 1 : 0);
+            glUniform1i(prg->vrFlatLocation, gevr_flat_uniform());
 
         if (prg->TanHalfFovLeft >= 0)
             glUniform1f(prg->TanHalfFovLeft, g_eyeTanHalfFov[0]);
@@ -1095,6 +1102,17 @@ if (uIsTitleLegal == 1 && vr_is_Menu_or_HUD) {
 }
 
 } // uVrFlat == 0
+
+// Steam Frame 3D cinema (uVrFlat 2): the screen pass drawn by two cameras with off-axis windows
+// meeting at the screen's distance (vr_cinema_math.h gevrCinemaShear). World vertices only: the
+// game's 2D (w = 1) and the HUD marker values stay at the screen plane in both eyes.
+if (uVrFlat == 2) {
+    float vr_cwm1 = abs(mvPos.w - 1.0);
+    if (vr_cwm1 != 0.0 && vr_cwm1 != 7.0 && vr_cwm1 != 8.0 && vr_cwm1 != 9.0) {
+        vec4 cinemaOffset = (gl_ViewID_OVR == 0u) ? uEyeOffsetLeft : uEyeOffsetRight;
+        mvPos.x -= cinemaOffset.x + cinemaOffset.y * mvPos.w;
+    }
+}
 
 gl_Position = vr_frozenDrop ? vec4(2.0, 2.0, 0.5, 1.0) : mvPos;   // outside x and y: clipped even with depth clamp
 )";
@@ -2418,7 +2436,7 @@ static void gfx_opengl_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_
         } else {
             memcpy(eye, s_eye_offsets, sizeof(eye));
         }
-        const int flatPass = gVrFlatPass ? 1 : 0;
+        const int flatPass = gevr_flat_uniform();
         // GoldenEye: the stereo watch capture turns the menu flag on and off
         // between draws of the same program (bondview2.c bondviewRenderWatch).
         const int isMenu = vr_dl_is_pause_or_menu ? 1 : 0;

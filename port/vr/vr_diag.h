@@ -37,6 +37,9 @@ typedef struct GevrDiag {
                                   it named (first time at once, then counts every 300 game frames), 0 = off */
     int   dump_hud;            /* on the Nth game frame that submits a HUD capture: vr-dumps/vr-hud-L/R/H/P.bmp (the
                                   captures' images as copied to their quad layers), 0 = off */
+    int   dump_cinema_frame;   /* the dump_frame files this many XR frames after the 3D cinema is placed (a cutscene
+                                  starts), with vr-dumps/vr-cinema0.bmp and vr-cinema1.bmp (its two eye images), 0 = off */
+    float cinema_sep_mm;       /* the 3D cinema's camera separation in mm, 0 = the default (64) */
 } GevrDiag;
 
 /* The settings; the file is read on the first call. Never NULL. */

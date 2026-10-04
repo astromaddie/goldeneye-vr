@@ -39,6 +39,7 @@
 #  include "vr_diag.h"
 #  include "vr_system.h"
 #  include "vr_watch_terminal.h"
+#  include "vr_cinema.h"
 #endif
 
 #ifdef ANDROID
@@ -1965,6 +1966,9 @@ extern "C" void vr_screen_recenter(void)
         vr_watch_screen_place();   // the watch's screen: its own place and shape
         return;
     }
+#ifdef GEVR_STEAM_FRAME
+    gevrCinemaRecenter();   // a cutscene's 3D cinema: placed again at the next XR frame (vr_cinema.cpp)
+#endif
     const XrPosef& l = g_frameViews[0].pose;
     const XrPosef& r = g_frameViews[1].pose;
     const XrQuaternionf& q = l.orientation;
@@ -3973,6 +3977,24 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
 #else
     const int nTerm = 0;
 #endif
+#ifdef GEVR_STEAM_FRAME
+    // A cutscene on the 3D cinema (vr_cinema.cpp): its projection layer instead of the virtual
+    // screen, rebuilt from this XR frame's own eye poses (g_frameViews, not the views an older eye
+    // image was drawn with: the screen is world-locked and its picture is not head-relative);
+    // never the screen's stale image, even without a layer.
+    XrCompositionLayerProjectionView cinemaViews[2];
+    XrCompositionLayerProjection cinemaLayer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
+    const bool submitCinema = gevrCinemaActive()
+        && gevrCinemaLayer(g_vrState.playSpace, g_frameViews.data(), &cinemaLayer, cinemaViews);
+    if (gevrCinemaActive()) {
+        submitScreen = false;
+    }
+    // Every change into or out of a cutscene: the black cover, over everything (standard.md "Transitions").
+    XrCompositionLayerQuad fadeLayer{XR_TYPE_COMPOSITION_LAYER_QUAD};
+    const bool submitFade = gevrCinemaFadeLayer(g_vrState.viewSpace, (long long)frameState.predictedDisplayTime, &fadeLayer);
+#else
+    const bool submitCinema = false, submitFade = false;
+#endif
     g_screenPending = false;
     XrCompositionLayerQuad screenLayer = {XR_TYPE_COMPOSITION_LAYER_QUAD};
     XrCompositionLayerCylinderKHR screenCyl = {XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR};
@@ -4083,7 +4105,7 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
     // or the stereo view (closing into the watch as play resumes).
     const bool termUnder = nTerm > 0 && g_screenVisible && g_eyeBackdrop != 1;
     int numLayers = 0;
-    const XrCompositionLayerBaseHeader* layers[12];   // screen, eyes, four menus, two scopes, two watch panels, spare
+    const XrCompositionLayerBaseHeader* layers[14];   // screen or cinema, eyes, four menus, two scopes, two watch panels, fade, spare
     const XrCompositionLayerBaseHeader* screenHdr = screenCurved
         ? reinterpret_cast<const XrCompositionLayerBaseHeader*>(&screenCyl)
         : reinterpret_cast<const XrCompositionLayerBaseHeader*>(&screenLayer);
@@ -4097,6 +4119,13 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
         layers[numLayers++] = reinterpret_cast<const XrCompositionLayerBaseHeader *>(&layer);
         layers[numLayers++] = screenHdr;
     } else {
+#ifdef GEVR_STEAM_FRAME
+        if (submitCinema) {
+            // the cinema under the eye layer, which is cleared transparent while it is up (screen mode)
+            layers[numLayers++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&cinemaLayer);
+            layer.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        }
+#endif
         if (submitScreen) {
             layers[numLayers++] = screenHdr;
             layer.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
@@ -4112,6 +4141,11 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
     for (int hand = 0; hand < 2; hand++) {
         if (submitScope[hand]) layers[numLayers++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&scopeLayer[hand]);
     }
+#ifdef GEVR_STEAM_FRAME
+    if (submitFade) layers[numLayers++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&fadeLayer);
+#endif
+    (void)submitCinema;
+    (void)submitFade;
 
 #ifndef ANDROID // if PC
     // for miroir PC
@@ -5029,6 +5063,7 @@ extern "C" void vr_shutdown()
     vr_screen_destroy_swapchain();
 #ifdef GEVR_STEAM_FRAME
     gevrTermDestroy();
+    gevrCinemaDestroy();
 #endif
     g_screenRecenterTimes.clear();
 

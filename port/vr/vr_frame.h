@@ -35,6 +35,9 @@ void vrFrameDumpScreen(int w, int h);
 void vrFrameDumpPanel(const char *name, int w, int h);
 /* The paused watch's screen (or terminal) was placed (vr_openxr.cpp): arms vr-diag.ini dump_watch_frame. */
 void vrFrameDumpWatchPlaced(void);
+/* The 3D cinema's screen was placed (vr_cinema.cpp): arms vr-diag.ini dump_cinema_frame. The dump then
+ * wants the cinema's images too (vr-cinema0/1.bmp, written through vrFrameDumpPanel). */
+void vrFrameDumpCinemaPlaced(void);
 /* State for the dump's log: called with the eye poses so the log shows what was drawn. */
 void vrFrameDumpState(const float headPos[3], const float headQuat[4], const float eyePos[2][3],
                       const float eyeFov[2][4], uint64_t xrFrame, long long swapchainFormat);
