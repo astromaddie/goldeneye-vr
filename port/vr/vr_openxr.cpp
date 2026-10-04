@@ -3904,6 +3904,23 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
     const int ctrlL = 0;
     const int ctrlR = 1;
 
+#ifdef GEVR_STEAM_FRAME
+    // The HUD quads keep world up (standard.md section 4: they follow the head's yaw and pitch, never
+    // its roll): world up in view space, and a face toward the eyes upright to it.
+    float hudUpV[3] = { 0.0f, 1.0f, 0.0f };
+    {
+        const XrQuaternionf &q = g_frameViews[0].pose.orientation;
+        rotvec(&hudUpV[0], &hudUpV[1], &hudUpV[2], q.w, -q.x, -q.y, -q.z);
+    }
+    auto uprightFacing = [&hudUpV](float px, float py, float pz) -> XrQuaternionf {
+        const float toViewer[3] = { -px, -py, -pz };
+        const float fallback[3] = { 1.0f, 0.0f, 0.0f };
+        float r3[3], u3[3], b3[3];
+        gevrUprightBasis(toViewer, hudUpV, fallback, r3, u3, b3);
+        return vr_quat_from_basis(r3, u3, b3);
+    };
+#endif
+
     // --- HUD Left Hand ---
     bool submitMenuL = (g_menuSwapchain != XR_NULL_HANDLE) && gfx_vr_menu_L_dirty_and_clear();
 
@@ -3985,6 +4002,9 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
                     const XrQuaternionf qy = {0.0f, sinf(yaw * 0.5f), 0.0f, cosf(yaw * 0.5f)};
                     const XrQuaternionf qx = {sinf(pitch * 0.5f), 0.0f, 0.0f, cosf(pitch * 0.5f)};
                     menuLayerR.pose.orientation = MultiplyQuaternions(qy, qx);
+#ifdef GEVR_STEAM_FRAME
+                    menuLayerR.pose.orientation = uprightFacing(px, py, pz);   // world up, not the head's
+#endif
                 }
                 submitMenuR = (g_menuSwapchainR != XR_NULL_HANDLE) && gfx_vr_menu_R_dirty_and_clear();
             }
@@ -4009,6 +4029,9 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
         const float d = 1.4f;   // 2 m read as a bit too far (user)
         const float hgt = 2.0f * d * tanf(22.0f * 3.14159265f / 180.0f);
         menuLayerH.pose.position = {0.f, 0.f, -d};
+#ifdef GEVR_STEAM_FRAME
+        menuLayerH.pose.orientation = uprightFacing(0.0f, 0.0f, -d);   // straight ahead, but level with the world
+#endif
         // The texture was allocated with fixed dimensions; optical FOV changes
         // must not stretch its pixels into rectangles.
         menuLayerH.size = {hgt * (float)g_menuSwapchainWidth / (float)g_menuSwapchainHeight, hgt};

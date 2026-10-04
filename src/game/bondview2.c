@@ -12747,6 +12747,59 @@ coord3d *gevrEyePosition(void)
     }
     return bondviewGetCurrentPlayersPosition();
 }
+
+/*
+ * The camera matrix the game's billboard sprites face (explosions, their smoke, hit sparks:
+ * explosion.c, glass2.c): in stereo the view-to-world matrix with its right and up rows made
+ * roll-free (port/vr/vr_upright_math.h). The stereo camera takes the head's roll, and the sprites,
+ * built from those rows, turned with a tilted head (GoldenEye wear, 2026-10-04; standard.md
+ * section 4). Their face still looks along the camera's view; they turn about world up and tilt
+ * with the view's pitch, never its roll. Outside stereo the game's own matrix.
+ */
+Mtxf *gevrBillboardMtxf(void)
+{
+    static Mtxf m;
+    Mtxf *v2w = currentPlayerGetViewToWorldMtxf();
+    f32 rows[3][3];
+    s32 i;
+
+    if (!g_gevrStereo || g_CurrentPlayer == NULL || g_CurrentPlayer->cameramode == 1)
+    {
+        return v2w;
+    }
+    m = *v2w;
+    for (i = 0; i < 3; i++)
+    {
+        rows[0][i] = v2w->m[0][i];
+        rows[1][i] = v2w->m[1][i];
+        rows[2][i] = v2w->m[2][i];
+    }
+    gevrUprightCameraRows(rows);
+    for (i = 0; i < 3; i++)
+    {
+        m.m[0][i] = rows[0][i];
+        m.m[1][i] = rows[1][i];
+    }
+#ifdef GEVR_STEAM_FRAME
+    {
+        /* vr-diag.ini diag_roll: the evidence, the camera's right against the sprites' (world y) */
+        static s32 lastFrame = -1;
+
+        if (gevrDiag()->diag_roll != 0.0f && g_GlobalTimer / 120 != lastFrame)
+        {
+            f32 cl = sqrtf(v2w->m[0][0] * v2w->m[0][0] + v2w->m[0][1] * v2w->m[0][1] + v2w->m[0][2] * v2w->m[0][2]);
+            f32 bl = sqrtf(m.m[0][0] * m.m[0][0] + m.m[0][1] * m.m[0][1] + m.m[0][2] * m.m[0][2]);
+
+            lastFrame = g_GlobalTimer / 120;
+            sysLogPrintf(LOG_NOTE, "[vr-diag] billboard: camera right.y %.3f, sprite right.y %.3f, sprite up.y %.3f (diag_roll %.0f)",
+                         cl > 0.0f ? v2w->m[0][1] / cl : 0.0f, bl > 0.0f ? m.m[0][1] / bl : 0.0f,
+                         m.m[1][1] / (sqrtf(m.m[1][0] * m.m[1][0] + m.m[1][1] * m.m[1][1] + m.m[1][2] * m.m[1][2]) + 1e-9f),
+                         gevrDiag()->diag_roll);
+        }
+    }
+#endif
+    return &m;
+}
 #endif
 
 #ifdef GEVR

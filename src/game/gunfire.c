@@ -1,6 +1,7 @@
 #ifdef GEVR
 #include "net_game.h"
 #include "gevr_scope.h"   /* the per-hand VR scope (issue #40) */
+#include "vr_upright_math.h"   /* the 3D sight and name tags keep world up */
 #endif
 #include <ultra64.h>
 #include <limits.h>
@@ -7776,11 +7777,47 @@ static Gfx *gevrDrawSight3D(Gfx *gdl, s32 hand, s32 scope)
     }
     k = half / 16.0f;
 
-    /* a quad facing the eye at p: vertices at +-16 in the view plane */
+    /*
+     * A quad facing the eye at p, vertices at +-16 across it. It keeps world up (standard.md
+     * section 4, no roll): the stereo camera takes the head's roll, and built on the camera's own
+     * x and y the sight turned with a tilted head (GoldenEye wear, 2026-10-04). Its place is the
+     * aim ray's alone. The scope's copy is square to the scope's camera and upright with the gun,
+     * as a real scope's reticle turns with the rifle.
+     */
     matrix_4x4_set_identity(&mf);
-    mf.m[0][0] = k;
-    mf.m[1][1] = k;
-    mf.m[2][2] = k;
+    {
+        f32 to[3], upHint[3], fallback[3] = { 1.0f, 0.0f, 0.0f }, r[3], u[3], b[3];
+        Mtxf *w2v = camGetWorldToScreenMtxf();   /* world +Y in view space is its row 1 */
+
+        if (scope && st->gunValid)
+        {
+            to[0] = st->origin[0] - p.x;
+            to[1] = st->origin[1] - p.y;
+            to[2] = st->origin[2] - p.z;
+            for (i = 0; i < 3; i++)
+            {
+                upHint[i] = st->gunAxes[1][i];
+                fallback[i] = st->gunAxes[0][i];
+            }
+        }
+        else
+        {
+            to[0] = -p.x;
+            to[1] = -p.y;
+            to[2] = -p.z;
+            for (i = 0; i < 3; i++)
+            {
+                upHint[i] = w2v->m[1][i];
+            }
+        }
+        gevrUprightBasis(to, upHint, fallback, r, u, b);
+        for (i = 0; i < 3; i++)
+        {
+            mf.m[0][i] = r[i] * k;
+            mf.m[1][i] = u[i] * k;
+            mf.m[2][i] = b[i] * k;
+        }
+    }
     mf.m[3][0] = p.x;
     mf.m[3][1] = p.y;
     mf.m[3][2] = p.z;
@@ -7916,9 +7953,23 @@ static Gfx *gevrDrawNameTag(Gfx *gdl, const char *name, coord3d at, s32 speaking
         k *= D_800364CC;
 
         matrix_4x4_set_identity(&mf);
-        mf.m[0][0] = k;
-        mf.m[1][1] = k;
-        mf.m[2][2] = k;
+        {
+            /* facing the eye, world up kept: no roll with the head (as the 3D sight) */
+            Mtxf *w2v = camGetWorldToScreenMtxf();
+            const f32 to[3] = { -v.x, -v.y, -v.z };
+            const f32 upHint[3] = { w2v->m[1][0], w2v->m[1][1], w2v->m[1][2] };
+            const f32 fallback[3] = { 1.0f, 0.0f, 0.0f };
+            f32 r[3], u[3], b[3];
+            s32 j;
+
+            gevrUprightBasis(to, upHint, fallback, r, u, b);
+            for (j = 0; j < 3; j++)
+            {
+                mf.m[0][j] = r[j] * k;
+                mf.m[1][j] = u[j] * k;
+                mf.m[2][j] = b[j] * k;
+            }
+        }
         mf.m[3][0] = v.x;
         mf.m[3][1] = v.y;
         mf.m[3][2] = v.z;

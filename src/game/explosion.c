@@ -1156,7 +1156,15 @@ Gfx *explosionRenderPart(struct ExplosionPart *arg0, Gfx *gdl, struct coord3d *c
 
     spA0 = g_ExplosionRenderPartDefaultVertex;
 
+#ifdef GEVR
+    {
+        /* stereo: the camera's right and up without the head's roll (bondview2.c) */
+        extern Mtxf *gevrBillboardMtxf(void);
+        sp9C = gevrBillboardMtxf();
+    }
+#else
     sp9C = currentPlayerGetViewToWorldMtxf();
+#endif
 #ifdef GEVR
     {
         extern coord3d *gevrEyePosition(void);   /* bondview2.c: stereo's eye, the head's rise included */
@@ -1293,7 +1301,14 @@ Gfx *explosionSmokeRenderPart(struct Smoke *smoke, struct SmokePart *smoke_part,
 
     spC0 = g_SmokeRenderPartDefaultVertex;
 
+#ifdef GEVR
+    {
+        extern Mtxf *gevrBillboardMtxf(void);   /* bondview2.c: no head roll */
+        mtx = gevrBillboardMtxf();
+    }
+#else
     mtx = currentPlayerGetViewToWorldMtxf();
+#endif
 #ifdef GEVR
     {
         extern coord3d *gevrEyePosition(void);   /* bondview2.c */

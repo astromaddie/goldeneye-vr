@@ -636,7 +636,14 @@ void bullet_spark_render(s_bullet_spark *thing, Gfx *gdlarg, s32 zbufferMode)
         return;
     }
 
+#ifdef GEVR
+    {
+        extern Mtxf *gevrBillboardMtxf(void);   /* bondview2.c: the sparks keep world up in stereo */
+        mtx = gevrBillboardMtxf();
+    }
+#else
     mtx = currentPlayerGetViewToWorldMtxf();
+#endif
     gdl = *((Gfx **) gdlarg);
     vertices = dynAllocateVertices(4);
     room = thing->unk06;
