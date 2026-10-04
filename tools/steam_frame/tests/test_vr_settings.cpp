@@ -213,6 +213,7 @@ int main()
     CHECK(strcmp(g_ActiveExtTexPack, "2024") == 0, "a pack named with digits loads as its name");
 
     unlink(VR_INI_PATH);
+    unlink("vr_debug.txt");   // vr_log.c's host file (the haptics table dump)
     rmdir(dir);
     if (failures) {
         fprintf(stderr, "%d of %d checks failed\n", failures, checks);
