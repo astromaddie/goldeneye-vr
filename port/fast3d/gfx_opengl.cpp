@@ -1979,34 +1979,53 @@ static void gevr_scope_keep(GLint first, const float* buf_vbo, size_t buf_vbo_le
     s_scopeDraws.push_back(d);
 }
 
-/* a hand's scope target, once (gfx_vr_scope_prepare makes both ahead of use) */
+/*
+ * A hand's scope target, once (gfx_vr_scope_prepare makes both ahead of use).
+ * The game's programs declare num_views = 2 (GL_OVR_multiview2), and drawing
+ * with one into a framebuffer of another view count is GL_INVALID_OPERATION
+ * by the extension's spec. Quest's driver let that pass into a flat target;
+ * Mesa (Zink on the Steam Frame) enforces it, so every scope draw was dropped
+ * and the lens showed only the clear, black. So the target is a two-layer
+ * array attached as two views, like the eye buffers: the scope image is layer
+ * 0, and the vertex shader's uScope branch drops view 1 (its layer stays
+ * clear). gfx_vr_scope_texture hands out the array; vr_openxr.cpp reads its
+ * layer 0. glTexImage3D, not glTexStorage3D: glad loads only what the GL
+ * version it parses has, and on GLES 3.2 that leaves glTexStorage3D (GL 4.2)
+ * NULL.
+ */
+static GLuint s_scopeReadFbo[2];   // layer 0 alone: reads (glReadPixels, the desktop blit) can't take two views
+
 static void gevr_scope_make_target(int hand)
 {
-    if (s_scopeFbo[hand]) {
+    if (s_scopeFbo[hand] || glFramebufferTextureMultiviewOVR == nullptr) {
         return;
     }
-    GLint prevFbo = 0;
+    GLint prevFbo = 0, prevArray = 0;
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &prevArray);
     glGenTextures(1, &s_scopeTex[hand]);
-    glBindTexture(GL_TEXTURE_2D, s_scopeTex[hand]);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, GEVR_SCOPE_RES, GEVR_SCOPE_RES, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glGenRenderbuffers(1, &s_scopeDepth[hand]);
-    glBindRenderbuffer(GL_RENDERBUFFER, s_scopeDepth[hand]);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, GEVR_SCOPE_RES, GEVR_SCOPE_RES);
-    glBindRenderbuffer(GL_RENDERBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, s_scopeTex[hand]);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, GEVR_SCOPE_RES, GEVR_SCOPE_RES, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glGenTextures(1, &s_scopeDepth[hand]);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, s_scopeDepth[hand]);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH24_STENCIL8, GEVR_SCOPE_RES, GEVR_SCOPE_RES, 2, 0,
+                 GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, NULL);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, (GLuint)prevArray);
     glGenFramebuffers(1, &s_scopeFbo[hand]);
     glBindFramebuffer(GL_FRAMEBUFFER, s_scopeFbo[hand]);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_scopeTex[hand], 0);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, s_scopeDepth[hand]);
+    glFramebufferTextureMultiviewOVR(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, s_scopeTex[hand], 0, 0, 2);
+    glFramebufferTextureMultiviewOVR(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, s_scopeDepth[hand], 0, 0, 2);
     const GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    glGenFramebuffers(1, &s_scopeReadFbo[hand]);
+    glBindFramebuffer(GL_FRAMEBUFFER, s_scopeReadFbo[hand]);
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, s_scopeTex[hand], 0, 0);
     sysLogPrintf(st == GL_FRAMEBUFFER_COMPLETE ? LOG_NOTE : LOG_WARNING,
-                 "scope: hand %d %dx%d target %s (0x%x)", hand, GEVR_SCOPE_RES, GEVR_SCOPE_RES,
+                 "scope: hand %d %dx%d two-view target %s (0x%x)", hand, GEVR_SCOPE_RES, GEVR_SCOPE_RES,
                  st == GL_FRAMEBUFFER_COMPLETE ? "ready" : "incomplete", st);
-    glBindTexture(GL_TEXTURE_2D, s_boundTex[s_activeTexUnit]);
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prevFbo);
 }
 
@@ -2078,6 +2097,9 @@ void gfx_vr_scope_render(void)
             continue;
         }
         gevr_scope_make_target(hand);
+        if (s_scopeFbo[hand] == 0) {
+            continue;   // no multiview: no target the game's programs can draw into
+        }
         glBindFramebuffer(GL_FRAMEBUFFER, s_scopeFbo[hand]);
         glViewport(0, 0, GEVR_SCOPE_RES, GEVR_SCOPE_RES);
         glDisable(GL_SCISSOR_TEST);
@@ -2141,6 +2163,7 @@ void gfx_vr_scope_render(void)
                 remove(trig);
                 static std::vector<uint8_t> px;
                 px.resize(GEVR_SCOPE_RES * GEVR_SCOPE_RES * 4);
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, s_scopeReadFbo[hand]);   // layer 0: not the two views
                 glReadPixels(0, 0, GEVR_SCOPE_RES, GEVR_SCOPE_RES, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
                 unsigned lit = 0;
                 for (size_t i = 0; i < px.size(); i += 4) {
@@ -2226,7 +2249,8 @@ void gfx_vr_scope_render(void)
     s_scopeDraws.clear();
 }
 
-// vr_openxr.cpp: this game frame's scope image for a hand, or 0 when there is none
+// vr_openxr.cpp: this game frame's scope image for a hand (a two-layer array, the image in
+// layer 0: gevr_scope_make_target), or 0 when there is none
 GLuint gfx_vr_scope_texture(int hand)
 {
     return (hand == 0 || hand == 1) && s_scopeDrawn[hand] ? s_scopeTex[hand] : 0;

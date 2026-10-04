@@ -1626,7 +1626,7 @@ static bool vr_scope_copy_init()
     static const char* fsSrc =
             "#version 300 es\n"
             "precision highp float;\n"
-            "uniform sampler2D uTex;\n"
+            "uniform highp sampler2DArray uTex;\n"   /* the scope's two-view target: its image is layer 0 */
             "uniform int uSrgb;\n"
             "out vec4 o;\n"
             "void main() {\n"
@@ -1637,7 +1637,7 @@ static bool vr_scope_copy_init()
             "    float px = 2.0 / size;\n"
             "    float a = 1.0 - smoothstep(1.0 - 2.0 * px, 1.0, r);\n"
             "    if (a <= 0.0) { o = vec4(0.0); return; }\n"
-            "    vec3 c = texture(uTex, uv).rgb;\n"
+            "    vec3 c = texture(uTex, vec3(uv, 0.0)).rgb;\n"
             "    c *= 1.0 - 0.6 * smoothstep(0.9, 1.0, r);\n"
             "    if (uSrgb == 1) c = mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));\n"
             "    o = vec4(c * a, a);\n"
@@ -1703,7 +1703,7 @@ static void vr_update_scope_swapchain(int hand, GLuint srcTex)
         glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVao);
         glGetIntegerv(GL_ACTIVE_TEXTURE, &prevActive);
         glActiveTexture(GL_TEXTURE0);
-        glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTex);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &prevTex);
         glGetIntegerv(GL_VIEWPORT, vp);
 
         glDisable(GL_SCISSOR_TEST);
@@ -1715,10 +1715,10 @@ static void vr_update_scope_swapchain(int hand, GLuint srcTex)
         glUniform1i(s_scopeCopySrgbLoc, (g_menuSwapchainIsSrgb && !g_srgbWritesRaw) ? 1 : 0);
         if (!s_menuCopyVao) glGenVertexArrays(1, &s_menuCopyVao);
         glBindVertexArray(s_menuCopyVao);
-        glBindTexture(GL_TEXTURE_2D, srcTex);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, srcTex);
         glDrawArrays(GL_TRIANGLES, 0, 3);
 
-        glBindTexture(GL_TEXTURE_2D, (GLuint)prevTex);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, (GLuint)prevTex);
         glActiveTexture((GLenum)prevActive);
         glBindVertexArray((GLuint)prevVao);
         glUseProgram((GLuint)prevProg);
@@ -1732,7 +1732,8 @@ static void vr_update_scope_swapchain(int hand, GLuint srcTex)
         static GLuint srcFbo = 0;
         if (!srcFbo) glGenFramebuffers(1, &srcFbo);
         glBindFramebuffer(GL_READ_FRAMEBUFFER, srcFbo);
-        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, srcTex, 0);
+        // the scope's two-view target (gfx_opengl.cpp gevr_scope_make_target): its image is layer 0
+        glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, srcTex, 0, 0);
         glDisable(GL_SCISSOR_TEST);
         glBlitFramebuffer(0, 0, GEVR_SCOPE_RES, GEVR_SCOPE_RES, 0, 0, GEVR_SCOPE_RES, GEVR_SCOPE_RES,
                           GL_COLOR_BUFFER_BIT, GL_NEAREST);
