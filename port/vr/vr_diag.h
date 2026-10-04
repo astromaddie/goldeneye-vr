@@ -29,6 +29,8 @@ typedef struct GevrDiag {
     int   refresh_rate;        /* request this display rate instead of the ini's VrRefreshRate, 0 = the ini's */
     int   diag_walk;           /* in stereo play hold the move stick: 1 forward (C-up), -1 back (C-down), 0 = off */
     float diag_turn;           /* in stereo play a constant smooth turn, -100..100 % of the stick (snap turn off) */
+    int   dump_watch_frame;    /* dump the eyes and the screen this many XR frames after the paused watch's screen is placed, 0 = off */
+    int   watch_backdrop;      /* the paused world behind the watch's screen: 0 = default (on), 1 = on, -1 = off (black, as before) */
 } GevrDiag;
 
 /* The settings; the file is read on the first call. Never NULL. */

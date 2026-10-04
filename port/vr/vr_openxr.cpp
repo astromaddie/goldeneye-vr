@@ -75,6 +75,7 @@
 #include "vr_hub.h"
 #include "vr_screen.h"
 #include "vr_aim_math.h"
+#include "vr_screen_math.h"
 
 extern "C" struct GfxRenderingAPI* gfx_get_current_rendering_api(void);
 
@@ -1789,6 +1790,70 @@ extern "C" void gevrVrScreenHeadLock(int on)
     g_screenHeadLocked = on != 0;
 }
 
+/*
+ * The paused watch on the Steam Frame (watch option D, "Better Big Screen",
+ * chosen 2026-10-04; bondview2.c gevrStereoFrame calls gevrVrWatchScreen
+ * instead of gevrVrScreenHeadLock there). The game's zoomed watch image goes
+ * on a screen of its own shape - 1.4 m wide at 1.5 m, curved when the runtime
+ * has cylinder layers - placed straight ahead at the head's yaw as the watch
+ * comes up and left there, world-locked, until it closes; a recentre places it
+ * again (vr_screen_math.c, host-tested). The player's screen size, distance
+ * and shape (VrScreen*) stay for menus and cutscenes. While it is up the eye
+ * buffers can carry the paused world (gfx_pc.cpp gevr_watch_backdrop, see
+ * g_eyeBackdrop below).
+ */
+static bool g_watchScreen = false;
+static GevrScreenPlace g_watchPlace;
+static GevrWatchScreenState g_watchState;
+
+// The screen's shape in force: the watch's while it is up, otherwise the player's.
+static inline float vr_scr_dist(void) { return g_watchScreen ? g_watchPlace.dist : VrScreenDistance; }
+static inline float vr_scr_fov(void) { return g_watchScreen ? g_watchPlace.fovDeg : VrScreenFov; }
+static inline bool vr_scr_curved(void)
+{
+    return g_watchScreen ? g_watchPlace.curved != 0 : (VrScreenCurved && g_cylinderSupported);
+}
+
+static void vr_watch_screen_place(void)
+{
+    const XrPosef& l = g_frameViews[0].pose;
+    const XrPosef& r = g_frameViews[1].pose;
+    const float head[3] = { (l.position.x + r.position.x) * 0.5f,
+                            (l.position.y + r.position.y) * 0.5f,
+                            (l.position.z + r.position.z) * 0.5f };
+    const float q[4] = { l.orientation.x, l.orientation.y, l.orientation.z, l.orientation.w };
+    gevrScreenPlaceAhead(head, q, GEVR_WATCH_SCREEN_DIST_M, GEVR_WATCH_SCREEN_WIDTH_M,
+                         GEVR_WATCH_SCREEN_DROP_M, g_cylinderSupported ? 1 : 0, &g_watchPlace);
+    g_watchScreen = true;
+    g_screenPose.position = { g_watchPlace.pos[0], g_watchPlace.pos[1], g_watchPlace.pos[2] };
+    g_screenPose.orientation = { g_watchPlace.quat[0], g_watchPlace.quat[1], g_watchPlace.quat[2], g_watchPlace.quat[3] };
+    g_screenYaw = g_watchPlace.yaw;
+    g_screenPlaced = true;
+    LOGI("[vr] watch screen placed yaw=%.1f dist=%.2f width=%.2f curved=%d (fov %.1f deg, centre %.2f m below the eyes, #%u)",
+         g_watchPlace.yaw * 180.0f / 3.14159265f, g_watchPlace.dist, g_watchPlace.width, g_watchPlace.curved,
+         g_watchPlace.fovDeg, GEVR_WATCH_SCREEN_DROP_M, g_watchState.placements);
+#ifdef GEVR_STEAM_FRAME
+    vrFrameDumpWatchPlaced();   // vr-diag.ini dump_watch_frame
+#endif
+}
+
+extern "C" void vr_screen_recenter(void);
+
+// bondview2.c gevrStereoFrame, once a game frame (Frame build): the pause's watch is up.
+extern "C" void gevrVrWatchScreen(int on)
+{
+    if (gevrWatchScreenStep(&g_watchState, on, 0)) {
+        vr_watch_screen_place();
+    } else if (!on && g_watchScreen) {
+        // back to the player's screen, in front of the head (a screen may stay up: abort mission)
+        g_watchScreen = false;
+        vr_screen_recenter();
+        LOGI("[vr] watch screen closed");
+    }
+}
+
+extern "C" int gevrVrWatchScreenUp(void) { return g_watchScreen ? 1 : 0; }
+
 static void vr_screen_destroy_swapchain(void)
 {
     if (g_screenSwapchain != XR_NULL_HANDLE) {
@@ -1849,6 +1914,10 @@ static bool vr_screen_ensure_swapchain(uint32_t w, uint32_t h)
 // level, facing the viewer. Play space, so it stays put while the head moves.
 extern "C" void vr_screen_recenter(void)
 {
+    if (gevrWatchScreenStep(&g_watchState, g_watchState.up, 1)) {
+        vr_watch_screen_place();   // the watch's screen: its own place and shape
+        return;
+    }
     const XrPosef& l = g_frameViews[0].pose;
     const XrPosef& r = g_frameViews[1].pose;
     const XrQuaternionf& q = l.orientation;
@@ -1881,7 +1950,7 @@ extern "C" void vr_screen_recenter(void)
 // angle as an arc), from the distance and the degrees of view it spans.
 static float vr_screen_width(void)
 {
-    return 2.0f * VrScreenDistance * tanf(VrScreenFov * 0.5f * 3.14159265f / 180.0f);
+    return 2.0f * vr_scr_dist() * tanf(vr_scr_fov() * 0.5f * 3.14159265f / 180.0f);
 }
 
 static void vr_screen_head(float out[3])
@@ -1924,7 +1993,8 @@ extern "C" void vr_screen_grab(int active)
     static float mid0[3], pos0[3];
     float a[3], b[3], q[4];
 
-    if (!g_screenPlaced || !active || g_screenHeadLocked || !gevrVrGripPosePlay(0, a, q) || !gevrVrGripPosePlay(1, b, q)) {
+    // not the watch's screen: it keeps its own place until the watch closes
+    if (!g_screenPlaced || !active || g_screenHeadLocked || g_watchScreen || !gevrVrGripPosePlay(0, a, q) || !gevrVrGripPosePlay(1, b, q)) {
         if (grabbing) {
             float h[3];
             vr_screen_head(h);
@@ -1974,7 +2044,8 @@ extern "C" void vr_screen_grab(int active)
 // the direction it is in (not snapped back in front of the head).
 extern "C" void vr_screen_resize(float dist, float fov)
 {
-    if (!g_screenPlaced) {
+    // the watch's screen keeps its shape: the new size is the player's, for menus and cutscenes
+    if (!g_screenPlaced || g_watchScreen) {
         VrScreenDistance = dist;
         VrScreenFov = fov;
         return;
@@ -2020,16 +2091,16 @@ static bool vr_screen_hit(int hand, float *u, float *v, float o[3])
     const float cy = cosf(g_screenYaw), sy = sinf(g_screenYaw);
     const float aspect = (float)g_screenW / (float)g_screenH;
 
-    if (VrScreenCurved && g_cylinderSupported) {
+    if (vr_scr_curved()) {
         // cylinder centre: back from the screen centre toward the viewer
-        const float c[3] = { g_screenPose.position.x + sy * VrScreenDistance,
+        const float c[3] = { g_screenPose.position.x + sy * vr_scr_dist(),
                              g_screenPose.position.y,
-                             g_screenPose.position.z + cy * VrScreenDistance };
+                             g_screenPose.position.z + cy * vr_scr_dist() };
         // into the cylinder's frame (rotate by -yaw about Y)
         const float rx = o[0] - c[0], ry = o[1] - c[1], rz = o[2] - c[2];
         const float lo[3] = { cy * rx - sy * rz, ry, sy * rx + cy * rz };
         const float ld[3] = { cy * dir[0] - sy * dir[2], dir[1], sy * dir[0] + cy * dir[2] };
-        const float r = VrScreenDistance;
+        const float r = vr_scr_dist();
         const float A = ld[0] * ld[0] + ld[2] * ld[2];
         const float B = 2.0f * (lo[0] * ld[0] + lo[2] * ld[2]);
         const float C = lo[0] * lo[0] + lo[2] * lo[2] - r * r;
@@ -2038,7 +2109,7 @@ static bool vr_screen_hit(int hand, float *u, float *v, float o[3])
         const float t = (-B + sqrtf(disc)) / (2.0f * A);
         if (t <= 0.0f) { g_ptrMissReason[hand] = 3; return false; }
         const float hx = lo[0] + ld[0] * t, hy = lo[1] + ld[1] * t, hz = lo[2] + ld[2] * t;
-        const float angle = VrScreenFov * 3.14159265f / 180.0f;
+        const float angle = vr_scr_fov() * 3.14159265f / 180.0f;
         const float height = r * angle / aspect;
         *u = 0.5f + vr_atan2f(hx, -hz) / angle;
         *v = 0.5f - hy / height;
@@ -2072,9 +2143,9 @@ static void vr_screen_uv_to_world(float u, float v, float out[3])
     const float aspect = (float)g_screenW / (float)g_screenH;
     float lx, ly, lz;           // in the screen's own frame, origin at its centre point's axis
     float bx, by, bz;           // origin of that frame
-    if (VrScreenCurved && g_cylinderSupported) {
-        const float r = VrScreenDistance;
-        const float angle = VrScreenFov * 3.14159265f / 180.0f;
+    if (vr_scr_curved()) {
+        const float r = vr_scr_dist();
+        const float angle = vr_scr_fov() * 3.14159265f / 180.0f;
         const float th = (u - 0.5f) * angle;
         lx = r * sinf(th);
         ly = (0.5f - v) * r * angle / aspect;
@@ -2216,31 +2287,14 @@ static bool vr_pointer_grid_probe(void)
     return on;
 }
 
-extern "C" void vr_pointer_draw(void)
+// The pointer's program, made on first use (the beam, its spot, and the
+// watch backdrop's cut-out). Leaves the vertex array and buffer bindings as found.
+static bool vr_pointer_prog_ready(void)
 {
-    const VrPointerHand &p0 = g_ptr[g_ptrActive];
-    const bool grid = g_screenVisible && g_screenW != 0 && vr_pointer_grid_probe();
-    const bool wanted = g_ptrFrame - g_ptrWantedFrame < 20;
-    if (!g_screenVisible || ((!p0.hit || !wanted) && !grid)) {
-        return;
-    }
-    VrPointerHand p = p0;
-    if (!p.hit || !wanted) {
-        // grid only: a zero-length beam at the centre
-        vr_screen_uv_to_world(0.5f, 0.5f, p.h);
-        p.o[0] = p.h[0]; p.o[1] = p.h[1] + 0.001f; p.o[2] = p.h[2];
-    }
-
-    // Save the GL state first: the one-time setup below binds its own vertex
-    // array and buffer. (Unbinding the buffer there, before saving, left
-    // GL_ARRAY_BUFFER at 0 for fast3d, whose next shader switch then pointed
-    // its attributes at address 0 - the driver crashed copying from it.)
-    GLint prevProg = 0, prevVao = 0, prevBuf = 0;
-    glGetIntegerv(GL_CURRENT_PROGRAM, &prevProg);
-    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVao);
-    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &prevBuf);
-
     if (s_ptrProg == 0) {
+        GLint prevVao = 0, prevBuf = 0;
+        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVao);
+        glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &prevBuf);
         const char *vs =
             "#version 300 es\n"
             "#extension GL_OVR_multiview2 : require\n"
@@ -2286,7 +2340,9 @@ extern "C" void vr_pointer_draw(void)
             LOGE("pointer: program failed: %s", log);
             glDeleteProgram(s_ptrProg);
             s_ptrProg = 0xffffffffu;
-            return;
+            glBindVertexArray((GLuint)prevVao);
+            glBindBuffer(GL_ARRAY_BUFFER, (GLuint)prevBuf);
+            return false;
         }
         s_ptrVpLoc = glGetUniformLocation(s_ptrProg, "uVP");
         glGenVertexArrays(1, &s_ptrVao);
@@ -2300,7 +2356,49 @@ extern "C" void vr_pointer_draw(void)
         glBindVertexArray((GLuint)prevVao);
         glBindBuffer(GL_ARRAY_BUFFER, (GLuint)prevBuf);
     }
-    if (s_ptrProg == 0xffffffffu) {
+    return s_ptrProg != 0xffffffffu;
+}
+
+// This XR frame's eye view-projections from play space, both eyes (GL matrices).
+static void vr_eye_vp_play(float vp[32])
+{
+    for (int eye = 0; eye < 2; eye++) {
+        float pose[16], view[16], proj[16];
+        QuatToMat4(g_frameViews[eye].pose.orientation, pose);
+        pose[12] = g_frameViews[eye].pose.position.x;
+        pose[13] = g_frameViews[eye].pose.position.y;
+        pose[14] = g_frameViews[eye].pose.position.z;
+        InvertRigidMat4(pose, view);
+        ProjectionFromFov(g_frameViews[eye].fov, 0.05f, 100.0f, proj);
+        Mat4Mul(proj, view, vp + eye * 16);
+    }
+}
+
+extern "C" void vr_pointer_draw(void)
+{
+    const VrPointerHand &p0 = g_ptr[g_ptrActive];
+    const bool grid = g_screenVisible && g_screenW != 0 && vr_pointer_grid_probe();
+    const bool wanted = g_ptrFrame - g_ptrWantedFrame < 20;
+    if (!g_screenVisible || ((!p0.hit || !wanted) && !grid)) {
+        return;
+    }
+    VrPointerHand p = p0;
+    if (!p.hit || !wanted) {
+        // grid only: a zero-length beam at the centre
+        vr_screen_uv_to_world(0.5f, 0.5f, p.h);
+        p.o[0] = p.h[0]; p.o[1] = p.h[1] + 0.001f; p.o[2] = p.h[2];
+    }
+
+    // Save the GL state first: the one-time setup below binds its own vertex
+    // array and buffer. (Unbinding the buffer there, before saving, left
+    // GL_ARRAY_BUFFER at 0 for fast3d, whose next shader switch then pointed
+    // its attributes at address 0 - the driver crashed copying from it.)
+    GLint prevProg = 0, prevVao = 0, prevBuf = 0;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &prevProg);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVao);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &prevBuf);
+
+    if (!vr_pointer_prog_ready()) {
         return;
     }
 
@@ -2313,16 +2411,7 @@ extern "C" void vr_pointer_draw(void)
 
     // eye view-projections, play space
     float vp[32];
-    for (int eye = 0; eye < 2; eye++) {
-        float pose[16], view[16], proj[16];
-        QuatToMat4(g_frameViews[eye].pose.orientation, pose);
-        pose[12] = g_frameViews[eye].pose.position.x;
-        pose[13] = g_frameViews[eye].pose.position.y;
-        pose[14] = g_frameViews[eye].pose.position.z;
-        InvertRigidMat4(pose, view);
-        ProjectionFromFov(g_frameViews[eye].fov, 0.05f, 100.0f, proj);
-        Mat4Mul(proj, view, vp + eye * 16);
-    }
+    vr_eye_vp_play(vp);
 
     float head[3];
     vr_screen_head(head);
@@ -2420,6 +2509,102 @@ extern "C" void vr_pointer_draw(void)
     glBindBuffer(GL_ARRAY_BUFFER, (GLuint)prevBuf);
     glUseProgram((GLuint)prevProg);
     glBlendFuncSeparate(srcRGB, dstRGB, srcA, dstA);
+    if (!blend) glDisable(GL_BLEND);
+    if (depth) glEnable(GL_DEPTH_TEST);
+    if (cull) glEnable(GL_CULL_FACE);
+    if (scissor) glEnable(GL_SCISSOR_TEST);
+}
+
+/*
+ * The paused watch's backdrop (Frame build; gfx_pc.cpp gevr_watch_backdrop).
+ * What the eye image holds, for vr_submit_frame's layer order: 0 only the
+ * pointer, cleared transparent, over the screen (as before); 1 the paused
+ * world, opaque, behind the screen; 2 the paused world with the screen's place
+ * cut out (vr_screen_cut_eyes) and the pointer, over the screen - the VR
+ * settings opened from the watch read the pointer, and the beam has to show
+ * in front of the screen. Reset whenever the eyes are drawn
+ * (gevrVrMarkEyesRendered); kept with the image for the XR frames that reuse it.
+ */
+static int g_eyeBackdrop = 0;
+extern "C" void gevrVrSetEyeBackdrop(int mode) { g_eyeBackdrop = mode; }
+
+// Something reads the pointer (the launcher, the front end, the VR settings).
+extern "C" int vr_pointer_wanted(void) { return g_ptrFrame - g_ptrWantedFrame < 20 ? 1 : 0; }
+
+/*
+ * Clear the eye buffers to transparent where the virtual screen is, drawn
+ * with this XR frame's views - the screen's own surface (a strip of the
+ * cylinder, or the quad), so the screen layer under the eye layer shows
+ * there. No depth, no gl_FragDepth; every GL state touched is put back.
+ */
+extern "C" void vr_screen_cut_eyes(void)
+{
+    if (!g_screenPlaced || g_screenW == 0 || g_screenH == 0) {
+        return;
+    }
+    GLint prevProg = 0, prevVao = 0, prevBuf = 0;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &prevProg);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVao);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &prevBuf);
+    if (!vr_pointer_prog_ready()) {
+        return;
+    }
+
+    enum { kSegs = 32 };
+    const int segs = vr_scr_curved() ? kSegs : 1;
+    static float verts[kSegs * 6][7];
+    int n = 0;
+    for (int i = 0; i < segs; i++) {
+        const float u0 = (float)i / segs, u1 = (float)(i + 1) / segs;
+        float a[3], b[3], c[3], d[3];
+        vr_screen_uv_to_world(u0, 0.0f, a);
+        vr_screen_uv_to_world(u1, 0.0f, b);
+        vr_screen_uv_to_world(u1, 1.0f, c);
+        vr_screen_uv_to_world(u0, 1.0f, d);
+        const float *quad[6] = { a, b, c, a, c, d };
+        for (int k = 0; k < 6; k++, n++) {
+            verts[n][0] = quad[k][0];
+            verts[n][1] = quad[k][1];
+            verts[n][2] = quad[k][2];
+            verts[n][3] = verts[n][4] = verts[n][5] = verts[n][6] = 0.0f;
+        }
+    }
+    float vp[32];
+    vr_eye_vp_play(vp);
+
+    const GLboolean blend = glIsEnabled(GL_BLEND), depth = glIsEnabled(GL_DEPTH_TEST),
+                    cull = glIsEnabled(GL_CULL_FACE), scissor = glIsEnabled(GL_SCISSOR_TEST);
+    GLint srcRGB, dstRGB, srcA, dstA, eqRGB, eqA;
+    glGetIntegerv(GL_BLEND_SRC_RGB, &srcRGB);
+    glGetIntegerv(GL_BLEND_DST_RGB, &dstRGB);
+    glGetIntegerv(GL_BLEND_SRC_ALPHA, &srcA);
+    glGetIntegerv(GL_BLEND_DST_ALPHA, &dstA);
+    glGetIntegerv(GL_BLEND_EQUATION_RGB, &eqRGB);
+    glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &eqA);
+    GLboolean colorMask[4];
+    glGetBooleanv(GL_COLOR_WRITEMASK, colorMask);
+
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_SCISSOR_TEST);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    // whatever the shader says, the result is (0, 0, 0, 0)
+    glEnable(GL_BLEND);
+    glBlendEquation(GL_FUNC_ADD);
+    glBlendFunc(GL_ZERO, GL_ZERO);
+    glUseProgram(s_ptrProg);
+    glUniformMatrix4fv(s_ptrVpLoc, 2, GL_FALSE, vp);
+    glBindVertexArray(s_ptrVao);
+    glBindBuffer(GL_ARRAY_BUFFER, s_ptrVbo);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(sizeof(verts[0]) * n), verts, GL_STREAM_DRAW);
+    glDrawArrays(GL_TRIANGLES, 0, n);
+
+    glBindVertexArray((GLuint)prevVao);
+    glBindBuffer(GL_ARRAY_BUFFER, (GLuint)prevBuf);
+    glUseProgram((GLuint)prevProg);
+    glBlendEquationSeparate((GLenum)eqRGB, (GLenum)eqA);
+    glBlendFuncSeparate(srcRGB, dstRGB, srcA, dstA);
+    glColorMask(colorMask[0], colorMask[1], colorMask[2], colorMask[3]);
     if (!blend) glDisable(GL_BLEND);
     if (depth) glEnable(GL_DEPTH_TEST);
     if (cull) glEnable(GL_CULL_FACE);
@@ -2588,9 +2773,14 @@ static void vr_stats_xr_frame(void)
 // The views the last stereo game frame's camera was built from (issue #53).
 static std::array<XrView, 2> g_recordedViews = { XrView{XR_TYPE_VIEW}, XrView{XR_TYPE_VIEW} };
 static bool g_haveRecordedViews = false;
+// ... the same, not cleared by the screen frames after it (the paused watch's
+// backdrop takes them a frame or two into the pause: gevrVrFreezeViews).
+static std::array<XrView, 2> g_lastStereoViews = { XrView{XR_TYPE_VIEW}, XrView{XR_TYPE_VIEW} };
+static bool g_haveLastStereoViews = false;
 
 extern "C" void gevrVrMarkEyesRendered(int stereo)
 {
+    g_eyeBackdrop = 0;   // the paused watch's backdrop sets its own after this
 #ifdef GEVR_STEAM_FRAME
     if (stereo) vrFrameDumpStereoFrame();
 #endif
@@ -2600,7 +2790,12 @@ extern "C" void gevrVrMarkEyesRendered(int stereo)
         g_haveRenderedViews = true;
         g_recordedViews = g_cameraViews;
         g_haveRecordedViews = true;
+        g_lastStereoViews = g_cameraViews;   // kept through screen frames, for the watch's backdrop
+        g_haveLastStereoViews = true;
     } else {
+        if (stereo) {
+            g_haveLastStereoViews = false;
+        }
         g_haveRenderedViews = false;
         g_haveRecordedViews = false;
     }
@@ -2623,13 +2818,48 @@ static void vr_quat_to_mat3(const XrQuaternionf& q, float m[9])   // row-major
     m[6] = 2.0f * (x * z - w * y);        m[7] = 2.0f * (y * z + w * x);        m[8] = 1.0f - 2.0f * (x * x + y * y);
 }
 
+static void vr_head_delta(const XrView* o, const XrView* n, float out[16]);
+
 extern "C" int gevrVrRedrawDelta(float out[16])
 {
     if (!g_haveRecordedViews || !g_frameStarted || !g_frameState.shouldRender || vr_world_scale <= 0.0f) {
         return 0;
     }
-    const XrView* o = g_recordedViews.data();
-    const XrView* n = g_frameViews.data();
+    vr_head_delta(g_recordedViews.data(), g_frameViews.data(), out);
+    return 1;
+}
+
+/*
+ * The paused world behind the watch's screen (Frame build, gfx_pc.cpp
+ * gevr_watch_backdrop): the last stereo frame's draws, kept as the pause
+ * began (gfx_opengl.cpp gfx_vr_frozen_take), drawn every XR frame from the
+ * head's pose then. These are the views its camera was built from.
+ */
+static std::array<XrView, 2> g_frozenViews = { XrView{XR_TYPE_VIEW}, XrView{XR_TYPE_VIEW} };
+static bool g_haveFrozenViews = false;
+
+extern "C" int gevrVrFreezeViews(void)
+{
+    g_haveFrozenViews = g_haveLastStereoViews;
+    if (g_haveFrozenViews) {
+        g_frozenViews = g_lastStereoViews;
+    }
+    return g_haveFrozenViews ? 1 : 0;
+}
+
+extern "C" void gevrVrUnfreezeViews(void) { g_haveFrozenViews = false; }
+
+extern "C" int gevrVrFrozenDelta(float out[16])
+{
+    if (!g_haveFrozenViews || !g_frameStarted || !g_frameState.shouldRender || vr_world_scale <= 0.0f) {
+        return 0;
+    }
+    vr_head_delta(g_frozenViews.data(), g_frameViews.data(), out);
+    return 1;
+}
+
+static void vr_head_delta(const XrView* o, const XrView* n, float out[16])
+{
     float Ro[9], Rn[9];
     vr_quat_to_mat3(o[0].pose.orientation, Ro);
     vr_quat_to_mat3(n[0].pose.orientation, Rn);
@@ -2650,7 +2880,6 @@ extern "C" int gevrVrRedrawDelta(float out[16])
         out[r * 4 + 3] = 0.0f;
     }
     out[15] = 1.0f;
-    return 1;
 }
 
 /*
@@ -3638,7 +3867,7 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
     g_screenPending = false;
     XrCompositionLayerQuad screenLayer = {XR_TYPE_COMPOSITION_LAYER_QUAD};
     XrCompositionLayerCylinderKHR screenCyl = {XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR};
-    const bool screenCurved = VrScreenCurved && g_cylinderSupported;
+    const bool screenCurved = vr_scr_curved();
     if (submitScreen) {
         screenLayer.layerFlags    = 0; // opaque
         screenLayer.space         = g_vrState.playSpace;
@@ -3654,7 +3883,7 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
             const XrVector3f hp = { (views[0].pose.position.x + views[1].pose.position.x) * 0.5f,
                                     (views[0].pose.position.y + views[1].pose.position.y) * 0.5f,
                                     (views[0].pose.position.z + views[1].pose.position.z) * 0.5f };
-            const float d = VrScreenDistance;
+            const float d = vr_scr_dist();
             float lx = 0.0f, ly = -d * tanf(GEVR_SCREEN_PIN_DOWN_DEG * 3.14159265f / 180.0f), lz = -d;
             rotvec(&lx, &ly, &lz, hq.w, hq.x, hq.y, hq.z);
             XrPosef pinned;
@@ -3717,15 +3946,15 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
             // its +Z (for the room screen, sin/cos of its yaw)
             screenCyl.pose = screenLayer.pose;
             {
-                float cx = 0.0f, cyy = 0.0f, cz = VrScreenDistance;
+                float cx = 0.0f, cyy = 0.0f, cz = vr_scr_dist();
                 const XrQuaternionf& sq = screenLayer.pose.orientation;
                 rotvec(&cx, &cyy, &cz, sq.w, sq.x, sq.y, sq.z);
                 screenCyl.pose.position.x += cx;
                 screenCyl.pose.position.y += cyy;
                 screenCyl.pose.position.z += cz;
             }
-            screenCyl.radius       = VrScreenDistance;
-            screenCyl.centralAngle = VrScreenFov * 3.14159265f / 180.0f;
+            screenCyl.radius       = vr_scr_dist();
+            screenCyl.centralAngle = vr_scr_fov() * 3.14159265f / 180.0f;
             screenCyl.aspectRatio  = (float)g_screenW / (float)g_screenH;
         }
     }
@@ -3735,15 +3964,26 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
     // (cleared transparent, holding only the laser pointer) over it, so the
     // beam and its spot show in front of the screen; otherwise the eye
     // buffers are the scene.
+    // The paused watch (Frame build, g_eyeBackdrop 1): the eye buffers hold the
+    // paused world, opaque, and go first, behind the screen. With the pointer
+    // wanted over it (the VR settings opened from the watch: 2) they keep the
+    // usual order, with the screen's place cut out of the world.
     int numLayers = 0;
     const XrCompositionLayerBaseHeader* layers[10];   // screen, eyes, four menus, two scopes, room to spare
-    if (submitScreen) {
-        layers[numLayers++] = screenCurved
-            ? reinterpret_cast<const XrCompositionLayerBaseHeader*>(&screenCyl)
-            : reinterpret_cast<const XrCompositionLayerBaseHeader*>(&screenLayer);
-        layer.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+    const XrCompositionLayerBaseHeader* screenHdr = screenCurved
+        ? reinterpret_cast<const XrCompositionLayerBaseHeader*>(&screenCyl)
+        : reinterpret_cast<const XrCompositionLayerBaseHeader*>(&screenLayer);
+    if (submitScreen && g_eyeBackdrop == 1) {
+        layer.layerFlags = 0;
+        layers[numLayers++] = reinterpret_cast<const XrCompositionLayerBaseHeader *>(&layer);
+        layers[numLayers++] = screenHdr;
+    } else {
+        if (submitScreen) {
+            layers[numLayers++] = screenHdr;
+            layer.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        }
+        layers[numLayers++] = reinterpret_cast<const XrCompositionLayerBaseHeader *>(&layer);
     }
-    layers[numLayers++] = reinterpret_cast<const XrCompositionLayerBaseHeader *>(&layer);
 
     if (submitMenuL) layers[numLayers++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&menuLayerL);
     if (submitMenuR) layers[numLayers++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&menuLayerR);

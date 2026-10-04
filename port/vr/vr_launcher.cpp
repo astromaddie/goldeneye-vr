@@ -2285,6 +2285,7 @@ static void gevrCheatPage(bool &open, const ImVec4 &gold)
 // Both grips: the screen is in your hands, as in game (port/src/input.c): it follows them, and
 // the right stick moves it nearer/farther (up/down) and makes it bigger/smaller (left/right).
 // The launcher and the in-game VR settings; returns whether it is held.
+extern "C" int gevrVrWatchScreenUp(void);   // vr_openxr.cpp
 static bool gevrScreenGrabStep(float deltaTime)
 {
     const bool grabbing = get_button_state(0, "grip") && get_button_state(1, "grip");
@@ -2295,7 +2296,8 @@ static bool gevrScreenGrabStep(float deltaTime)
         const float dt = deltaTime > 0.1f ? 0.1f : deltaTime;
         const float dy = fabsf(r.y) > 0.2f ? r.y : 0.0f;
         const float dx = fabsf(r.x) > 0.2f ? r.x : 0.0f;
-        if (dy != 0.0f || dx != 0.0f) {
+        // not the paused watch's screen (opened from the watch): it keeps its own shape and place
+        if ((dy != 0.0f || dx != 0.0f) && !gevrVrWatchScreenUp()) {
             const float width = 2.0f * VrScreenDistance * tanf(VrScreenFov * 0.5f * 3.14159265f / 180.0f);
             float dist = VrScreenDistance + dy * 1.5f * dt;
             if (dist < VR_SCREEN_DISTANCE_MIN) dist = VR_SCREEN_DISTANCE_MIN;

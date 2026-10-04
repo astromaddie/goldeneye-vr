@@ -48,6 +48,7 @@ extern s32 g_gevrStereo;          /* bondview2.c: this frame is stereo */
 extern s32 gevrScopeZoomStick(void);  /* bondview2.c: aiming the sniper, this stick zooms */
 extern s32 gevrStereoWatchItem(s32 item);  /* bondview2.c: the watch laser, the detonator (#31) */
 extern int gevrVrScreenMode;      /* gfx_pc.cpp: this frame is on the virtual screen */
+extern int gevrVrWatchScreenUp(void);   /* vr_openxr.cpp: the paused watch's own screen is up (Frame build) */
 extern int VrPlayMode;            /* vr_settings: 1 = stereo gameplay */
 extern void vrSettingsSave(void);
 extern int gevrVrWatchGesture(void); /* vr_input.cpp */
@@ -1492,7 +1493,8 @@ s32 inputReadController(s32 idx, OSContPad *npad)
                 changed = true;
                 const float dy = fabsf(right.y) > 0.2f ? right.y : 0.0f;
                 const float dx = fabsf(right.x) > 0.2f ? right.x : 0.0f;
-                if (dy != 0.0f || dx != 0.0f) {
+                /* not the paused watch's screen (Frame build): it keeps its own shape and place */
+                if ((dy != 0.0f || dx != 0.0f) && !gevrVrWatchScreenUp()) {
                     const float halftan = tanf(VrScreenFov * 0.5f * 3.14159265f / 180.0f);
                     const float width = 2.0f * VrScreenDistance * halftan;
                     float dist = VrScreenDistance + dy * 1.5f * dt;

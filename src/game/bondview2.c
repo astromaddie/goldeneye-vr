@@ -860,6 +860,7 @@ static void gevrTexpackMessage(s32 inlevel)
 
 #ifdef GEVR_STEAM_FRAME
 extern int gevrVrSettingsIsOpen(void);   /* port/vr/vr_launcher.cpp */
+extern void gevrVrWatchScreen(s32 on);   /* port/vr/vr_openxr.cpp: the paused watch's screen */
 #endif
 void gevrStereoFrame(s32 inlevel)
 {
@@ -891,12 +892,17 @@ void gevrStereoFrame(s32 inlevel)
 #endif
         ;
 
-    gevrVrScreenHeadLock(!want && inlevel && VrPlayMode != 0 && pl != NULL
-                         && pl->watch_animation_state != 0
 #ifdef GEVR_STEAM_FRAME
-                         && !gevrVrSettingsIsOpen()   /* placed in the room, for the laser */
+    /* Watch option D (2026-10-04): the paused watch gets its own curved screen,
+     * world-locked straight ahead from the moment it comes up (no head lock),
+     * with the paused world in stereo behind it (gfx_pc.cpp gevr_watch_backdrop).
+     * The VR settings opened from the watch show on that same screen. */
+    gevrVrWatchScreen(!want && inlevel && VrPlayMode != 0 && pl != NULL
+                      && pl->watch_animation_state != 0);
+#else
+    gevrVrScreenHeadLock(!want && inlevel && VrPlayMode != 0 && pl != NULL
+                         && pl->watch_animation_state != 0);
 #endif
-                         );
 
     if (want && !s_gevrStereoWas)
     {

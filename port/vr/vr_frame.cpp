@@ -56,6 +56,10 @@ static bool s_dumpEyesOk;        /* this frame's eye layers were written */
 static int s_dumpTries;          /* frames that were armed but wrote nothing (no eye pass, GL error) */
 static char s_stateLine[640];
 static bool s_stateWritten;
+static uint64_t s_xrFrame;           /* the XR frame being drawn (vrFrameDumpFrameBegin) */
+static uint64_t s_watchDumpAt;       /* dump_watch_frame: the XR frame to dump at, 0 = not armed */
+static bool s_dumpNeedScreen;        /* this dump is complete only with the virtual screen too */
+static bool s_dumpScreenOk;
 
 static bool write_bmp24(const char *path, const uint8_t *rgba, int w, int h, unsigned *opaquePct)
 {
@@ -127,7 +131,14 @@ extern "C" void vrFrameDumpFrameBegin(uint64_t xrFrame)
     s_dumpEyesOk = false;
     s_dumpWrote = false;
     s_stateLine[0] = 0;
+    s_dumpScreenOk = false;
+    s_xrFrame = xrFrame;
     if (s_dumpDone || s_dumpTries > 600) return;
+    /* dump_watch_frame: N XR frames after the paused watch's screen was placed, eyes and screen */
+    if (s_watchDumpAt != 0 && xrFrame >= s_watchDumpAt) {
+        s_dumpActive = true;
+        s_dumpNeedScreen = true;
+    }
     /* from frame N on, until a frame really draws the eyes: frame N itself may draw none
      * (a redraw with nothing to replay, a mode switch) */
     if (d->dump_frame > 0 && xrFrame >= (uint64_t)d->dump_frame) {
@@ -146,6 +157,16 @@ extern "C" void vrFrameDumpStereoFrame(void)
 }
 
 extern "C" int vrFrameDumpDue(void) { return s_dumpActive ? 1 : 0; }
+
+extern "C" void vrFrameDumpWatchPlaced(void)
+{
+    const GevrDiag *d = gevrDiag();
+    if (d->dump_watch_frame > 0 && !s_dumpDone && s_watchDumpAt == 0) {
+        s_watchDumpAt = s_xrFrame + (uint64_t)d->dump_watch_frame;
+        FLOG("[vr-dump] armed for the paused watch: XR frame %llu (%d after the screen was placed)",
+             (unsigned long long)s_watchDumpAt, d->dump_watch_frame);
+    }
+}
 
 extern "C" void vrFrameDumpEyes(unsigned tex, int w, int h)
 {
@@ -186,6 +207,7 @@ extern "C" void vrFrameDumpScreen(int w, int h)
     if (!s_dumpActive) return;
     if (dump_read_framebuffer("vr-hud.bmp", w, h, &pct)) {
         s_dumpWrote = true;
+        s_dumpScreenOk = true;
         char extra[64];
         snprintf(extra, sizeof(extra), " screen=%dx%d screen_opaque_pct=%u", w, h, pct);
         strncat(s_stateLine, extra, sizeof(s_stateLine) - strlen(s_stateLine) - 1);
@@ -231,7 +253,13 @@ extern "C" void vrFrameDumpFinish(void)
         fclose(f);
     }
     s_stateWritten = false;
-    if (s_dumpEyesOk) {
+    if (s_dumpEyesOk && s_dumpNeedScreen && !s_dumpScreenOk) {
+        /* the paused watch's dump wants both images from one game frame: an in-between XR
+         * frame redraws the eyes only, so wait for the next game frame (files are rewritten) */
+        if (++s_dumpTries == 1 || s_dumpTries % 120 == 0) {
+            FLOG("[vr-dump] eyes written without the virtual screen (an in-between frame); trying again");
+        }
+    } else if (s_dumpEyesOk) {
         FLOG("[vr-dump] wrote %s/vr-eye0.bmp, vr-eye1.bmp (%s)", kDumpDir, s_stateLine);
         s_dumpDone = true;   /* one complete dump per run */
     } else {

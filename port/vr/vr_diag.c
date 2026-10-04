@@ -41,6 +41,8 @@ static void apply(const char *key, const char *val)
         float t = (float)atof(val);
         s_diag.diag_turn = t < -100.0f ? -100.0f : t > 100.0f ? 100.0f : t;
     }
+    else if (!strcmp(key, "dump_watch_frame")) s_diag.dump_watch_frame = atoi(val);
+    else if (!strcmp(key, "watch_backdrop")) s_diag.watch_backdrop = parse_bool(val) ? 1 : -1;
     else DIAG_LOG("[vr-diag] unknown key '%s'", key);
 }
 
@@ -81,10 +83,11 @@ static void load(void)
     }
     DIAG_LOG("[vr-diag] vr-diag.ini %s: force_render=%d diag_yaw=%.1f dump_frame=%d dump_stereo_frame=%d "
              "boot_stage=%d difficulty=%d timing=%d autostart=%d exit_after_s=%.0f one_shot=%d refresh_rate=%d "
-             "diag_walk=%d diag_turn=%.0f",
+             "diag_walk=%d diag_turn=%.0f dump_watch_frame=%d watch_backdrop=%d",
              s_diag.present ? "read" : "absent", s_diag.force_render, s_diag.diag_yaw, s_diag.dump_frame,
              s_diag.dump_stereo_frame, s_diag.boot_stage, s_diag.difficulty, s_diag.timing, s_diag.autostart,
-             s_diag.exit_after_s, s_diag.one_shot, s_diag.refresh_rate, s_diag.diag_walk, s_diag.diag_turn);
+             s_diag.exit_after_s, s_diag.one_shot, s_diag.refresh_rate, s_diag.diag_walk, s_diag.diag_turn,
+             s_diag.dump_watch_frame, s_diag.watch_backdrop);
 }
 
 const GevrDiag *gevrDiag(void)
