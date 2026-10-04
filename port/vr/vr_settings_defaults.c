@@ -83,6 +83,13 @@ int VrWatchStyle = 1;
 #else
 int VrWatchStyle = 0;
 #endif
+/* In-engine cutscenes on the Frame (standard key cutscenes): 1 = the 3D cinema (vr_cinema.cpp, the
+ * standard's comfort default), 0 = flat on the virtual screen. The Quest build never reads it. */
+#ifdef GEVR_STEAM_FRAME
+int VrCutsceneMode = 1;
+#else
+int VrCutsceneMode = 0;
+#endif
 
 /* --- Physical setup ------------------------------------------------------ */
 

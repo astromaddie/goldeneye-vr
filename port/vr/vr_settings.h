@@ -53,6 +53,11 @@ extern float VrSwayStrength;
 extern int VrRefreshRate;
 // The paused watch (Frame build): 1 = the Q-Branch terminal, 0 = the big screen (vr_watch_terminal.h).
 extern int VrWatchStyle;
+// In-engine cutscenes (Frame build, standard key `cutscenes`): 1 = the 3D cinema (a world-locked
+// screen with stereo depth, vr_cinema.cpp), 0 = flat on the virtual screen, as before.
+#define VR_CUTSCENES_FLAT 0
+#define VR_CUTSCENES_CINEMA_3D 1
+extern int VrCutsceneMode;
 
 // Your standing EYE height in cm -- where your eyes are off the floor, roughly
 // 13 cm below the top of your head, not your stature. That is what the headset

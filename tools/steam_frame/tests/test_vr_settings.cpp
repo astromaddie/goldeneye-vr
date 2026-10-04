@@ -63,7 +63,7 @@ static int failures, checks;
 static bool near(float a, float b, float eps = 0.006f) { return std::fabs(a - b) < eps; }
 
 struct Values {
-    int curved, steady, hz, even, stairs, motionThrow, lefty, swap, stats, nolean, gunSize, unlock, watch;
+    int curved, steady, hz, even, stairs, motionThrow, lefty, swap, stats, nolean, gunSize, unlock, watch, cutscenes;
     float fov, dist, snap, vignette, sway, throwStrength, throwPitch, gaze;
     unsigned long long cheats;
     float gunOff[3], grip[2][6];
@@ -82,6 +82,7 @@ static void put(const Values &v)
     VrEvenMovement = v.even;
     VrSmoothStairs = v.stairs;
     VrWatchStyle = v.watch;
+    VrCutsceneMode = v.cutscenes;
     VrSwayStrength = v.sway;
     VrMotionThrowing = v.motionThrow != 0;
     VrMotionThrowStrength = v.throwStrength;
@@ -118,6 +119,7 @@ static void expect(const Values &v, const char *when)
     EXPECT(VrEvenMovement == v.even, "EvenMovement");
     EXPECT(VrSmoothStairs == v.stairs, "SmoothStairs");
     EXPECT(VrWatchStyle == v.watch, "WatchStyle");
+    EXPECT(VrCutsceneMode == v.cutscenes, "CutsceneMode");
     EXPECT(near(VrSwayStrength, v.sway), "SwayStrength");
     EXPECT((VrMotionThrowing ? 1 : 0) == v.motionThrow, "MotionThrowing");
     EXPECT(near(VrMotionThrowStrength, v.throwStrength), "MotionThrowStrength");
@@ -161,15 +163,16 @@ int main()
     }
     vrSettingsLoad();   // no file yet: the defaults are the settings, and saving is allowed
     CHECK(VrWatchStyle == 1, "WatchStyle: the Frame's default is the Q-Branch terminal");
+    CHECK(VrCutsceneMode == VR_CUTSCENES_CINEMA_3D, "CutsceneMode: the Frame's default is the 3D cinema");
 
     // Two full sets of values, every one different from the other and from the defaults, at the
     // precision the file keeps. Smooth turning and a vignette/sway of 0 are covered by set B.
-    const Values a = { 1, 1, 120, 0, 0, 0, 1, 1, 1, 1, 2, 1, 0,
+    const Values a = { 1, 1, 120, 0, 0, 0, 1, 1, 1, 1, 2, 1, 0, 0,
                        85.0f, 3.25f, 45.0f, 0.70f, 0.35f, 1.75f, -12.5f, 0.85f,
                        0x0000000180004004ULL,
                        { 1.25f, -0.5f, -10.75f }, { { 1, 2, 3, 4.5f, 5.5f, 6.5f }, { -1, -2, -3, -4.5f, 0, 90 } },
                        7, 120 };
-    const Values b = { 0, 0, 72, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1,
+    const Values b = { 0, 0, 72, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1,
                        40.0f, 1.5f, 0.0f, 0.0f, 0.0f, 0.5f, 20.0f, 0.0f,
                        0ULL,
                        { 3.0f, 2.0f, -14.0f }, { { 0, 0, 0, 0, 0, 0 }, { 0.5f, 0.5f, 0.5f, 10, 20, 30 } },
@@ -192,7 +195,7 @@ int main()
     writeIni("[VR]\n"
              "SnapTurn=45\nComfortVignette=1\nScreenDistance=3\nScreenFov=70\nSwayStrength=1\n"
              "MotionThrowStrength=2\nMotionThrowPitch=-5\nMotionThrowGazeAssist=1\n"
-             "DisplayHz=90.0\nLeftHandedMode=1.0\nAimSteadying=1.0\nEvenMovement=0.0\nScreenCurved=1.0\nWatchStyle=0.0\n"
+             "DisplayHz=90.0\nLeftHandedMode=1.0\nAimSteadying=1.0\nEvenMovement=0.0\nScreenCurved=1.0\nWatchStyle=0.0\nCutsceneMode=0.0\n"
              "GunOffX=2\nGunOffY=1\nGunOffZ=-11\n");
     vrSettingsLoad();
     CHECK(near(VrUseSnapTurn, 45.0f), "SnapTurn=45 (an integer for a float key)");
@@ -209,6 +212,7 @@ int main()
     CHECK(VrEvenMovement == 0, "EvenMovement=0.0");
     CHECK(VrScreenCurved == 1, "ScreenCurved=1.0");
     CHECK(VrWatchStyle == 0, "WatchStyle=0.0");
+    CHECK(VrCutsceneMode == VR_CUTSCENES_FLAT, "CutsceneMode=0.0");
     CHECK(near(VrGunOffX, 2.0f) && near(VrGunOffY, 1.0f) && near(VrGunOffZ, -11.0f), "GunOffX/Y/Z as integers");
 
     // Text stays text, and unknown keys are ignored.

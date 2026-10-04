@@ -118,6 +118,9 @@ extern "C" void vrSettingsSave(void)
     fprintf(f, "; The paused watch (Steam Frame): 1 = the Q-Branch terminal, a sharp panel 0.9 m ahead\n");
     fprintf(f, "; with the watch's pages; 0 = the big screen with the zoomed watch. From the next pause.\n");
     fprintf(f, "WatchStyle=%d\n", VrWatchStyle);
+    fprintf(f, "; In-engine cutscenes (Steam Frame): 1 = a 3D cinema screen 3 m ahead, with stereo depth;\n");
+    fprintf(f, "; 0 = flat on the virtual screen. From the next cutscene.\n");
+    fprintf(f, "CutsceneMode=%d\n", VrCutsceneMode);
 
     // --- VR hand placement (no menu UI; edit here) --------------------------------------------
     fprintf(f, "\n");
@@ -215,6 +218,7 @@ static bool vrSettingsLoadInt(const char *key, int ival)
     else if (strcmp(key, "SmoothStairs") == 0) VrSmoothStairs = ival != 0 ? 1 : 0;
     else if (strcmp(key, "SwayStrength") == 0) VrSwayStrength = ival <= 0 ? 0.0f : 1.0f;
     else if (strcmp(key, "WatchStyle") == 0) VrWatchStyle = ival != 0 ? 1 : 0;
+    else if (strcmp(key, "CutsceneMode") == 0) VrCutsceneMode = ival != 0 ? VR_CUTSCENES_CINEMA_3D : VR_CUTSCENES_FLAT;
     /* DisplayHz replaces RefreshRate, whose 120 was only ever the old default
      * (no option set it): the new default, 90, applies to existing installs. */
     else if (strcmp(key, "DisplayHz") == 0) VrRefreshRate = ival < 0 ? 0 : ival;
@@ -272,6 +276,7 @@ static bool vrSettingsLoadFloat(const char *key, float fval, int *gunOffRead, fl
     else if (strcmp(key, "EvenMovement") == 0) VrEvenMovement = fval != 0.0f ? 1 : 0;
     else if (strcmp(key, "SmoothStairs") == 0) VrSmoothStairs = fval != 0.0f ? 1 : 0;
     else if (strcmp(key, "WatchStyle") == 0) VrWatchStyle = fval != 0.0f ? 1 : 0;
+    else if (strcmp(key, "CutsceneMode") == 0) VrCutsceneMode = fval != 0.0f ? VR_CUTSCENES_CINEMA_3D : VR_CUTSCENES_FLAT;
     else if (strcmp(key, "SwayStrength") == 0) {
         if (fval < 0.0f) fval = 0.0f;
         if (fval > 1.0f) fval = 1.0f;

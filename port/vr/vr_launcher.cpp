@@ -2359,6 +2359,25 @@ static void gevrSettingsColumns(bool inGame, int *mode, GevrComfortChoice &comfo
                 ImGui::SetTooltip("Chosen in the launcher, when GoldenEye VR starts.");
             }
         }
+#ifdef GEVR_STEAM_FRAME
+        {
+            // In-engine cutscenes (CutsceneMode; vr_cinema.cpp): read as each cutscene starts.
+            int cut = VrCutsceneMode ? 1 : 0;
+            ImGui::TextUnformatted("Cutscenes");   // own line, as the paused watch's choice
+            ImGui::RadioButton("3D cinema##cut", &cut, 1);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Intros, the swirl, death replays and mission endings on a big\n"
+                                  "screen 3 m ahead, with real depth. Comfortable: the game's\n"
+                                  "camera moves never move your head.");
+            }
+            ImGui::SameLine();
+            ImGui::RadioButton("Flat##cut", &cut, 0);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Cutscenes flat on the virtual screen, as before.");
+            }
+            VrCutsceneMode = cut;
+        }
+#endif
         ImGui::Spacing();
         ImGui::TextColored(gold, "SCREEN");
         if (ImGui::IsItemHovered()) {
