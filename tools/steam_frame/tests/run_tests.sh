@@ -29,6 +29,11 @@ done
     "$here/test_vr_aim.c" "$root/port/vr/vr_aim_math.c" -lm -o "$out/test_vr_aim"
 "$out/test_vr_aim"
 
+# the paused watch's screen placement (port/vr/vr_screen_math.c), the production functions
+"$cc" -std=c11 -Wall -Wextra -Werror -I"$root/port/vr" \
+    "$here/test_vr_screen.c" "$root/port/vr/vr_screen_math.c" -lm -o "$out/test_vr_screen"
+"$out/test_vr_screen"
+
 # goldeneye-vr.ini: every key the in-game VR settings change, save -> load (port/vr/vr_settings.cpp,
 # vr_settings_defaults.c, vr_haptics.cpp, vr_log.c: the production files)
 "$cc" -std=c11 -Wall -Wextra -DGEVR_STEAM_FRAME=1 -I"$root/include" -I"$root/port/include" \
