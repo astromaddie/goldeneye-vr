@@ -28,3 +28,13 @@ done
 "$cc" -std=c11 -Wall -Wextra -Werror -I"$root/port/vr" \
     "$here/test_vr_aim.c" "$root/port/vr/vr_aim_math.c" -lm -o "$out/test_vr_aim"
 "$out/test_vr_aim"
+
+# goldeneye-vr.ini: every key the in-game VR settings change, save -> load (port/vr/vr_settings.cpp,
+# vr_settings_defaults.c, vr_haptics.cpp, vr_log.c: the production files)
+"$cc" -std=c11 -Wall -Wextra -DGEVR_STEAM_FRAME=1 -I"$root/include" -I"$root/port/include" \
+    -c "$root/port/vr/vr_settings_defaults.c" -o "$out/vr_settings_defaults.o"
+"$cc" -std=c11 -Wall -Wextra -c "$root/port/vr/vr_log.c" -o "$out/vr_log.o"
+"$cxx" -std=c++17 -Wall -Wextra -DGEVR_STEAM_FRAME=1 -I"$root/port/vr" -I"$root/OpenXR/Include" -I"$here/fake" \
+    "$here/test_vr_settings.cpp" "$root/port/vr/vr_settings.cpp" "$root/port/vr/vr_haptics.cpp" \
+    "$out/vr_settings_defaults.o" "$out/vr_log.o" -o "$out/test_vr_settings"
+"$out/test_vr_settings"

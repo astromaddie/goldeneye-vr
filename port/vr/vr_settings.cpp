@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 
 #include "vr_settings.h"
 #include "vr_screen.h"
@@ -160,6 +161,161 @@ extern "C" void vrEnsurePlayerName(void)
     vrSettingsSave();
 }
 
+// One "Key=integer" line; false: not an integer key. (vrSettingsLoad: an integer key written
+// with a decimal point comes here too, and a float key written as an integer goes to the float one.)
+static bool vrSettingsLoadInt(const char *key, int ival)
+{
+    if (strcmp(key, "ManualReloading") == 0) VrManualReloading = ival != 0;
+    else if (strcmp(key, "LaserDotForAll") == 0) VrlaserDotForALL = ival != 0;
+    else if (strcmp(key, "SeatedMode") == 0) VrSeatedMode = ival != 0;
+    else if (strcmp(key, "MotionThrowing") == 0) VrMotionThrowing = ival != 0;
+    else if (strcmp(key, "WeaponRecoil") == 0) VrWeaponRecoil = (ival != 0);
+    else if (strcmp(key, "StickClickToCrouch") == 0) VrStickClickToCrouch = (ival != 0);
+    else if (strcmp(key, "AimNoLean") == 0) VrAimNoLean = (ival != 0);
+    else if (strcmp(key, "PauseHub") == 0) VrPauseHub = (ival != 0);
+    else if (strcmp(key, "TwoHandedAiming") == 0) VrTwoHandAim = (ival != 0);
+    else if (strcmp(key, "LeftHandedMode") == 0) VrLeftHandedMode = (ival != 0);
+    else if (strcmp(key, "SwapJoysticks") == 0) VrSwapJoysticks = (ival != 0);
+    else if (strcmp(key, "AimSteadying") == 0) VrAimSteady = ival < 0 ? 0 : ival > 2 ? 2 : ival;
+    else if (strcmp(key, "ShowStats") == 0) VrShowStats = (ival != 0);
+    else if (strcmp(key, "GunSizeCheat") == 0) VrGunSizeCheat = ival < 0 ? 0 : ival > 2 ? 2 : ival;
+    else if (strcmp(key, "UnlockAll") == 0) VrUnlockAll = ival != 0;
+    else if (strcmp(key, "HideArms") == 0) VrHideArms = (ival != 0);
+    else if (strcmp(key, "MatchCharacterHeight") == 0) VrMatchCharacterHeight = (ival != 0);
+    else if (strcmp(key, "FistClench") == 0) VrFistClench = ival;
+    else if (strcmp(key, "PlayMode") == 0) VrPlayMode = ival != 0 ? VR_PLAYMODE_STEREO : VR_PLAYMODE_SCREEN;
+    else if (strcmp(key, "MicMuted") == 0) VrMicMuted = ival != 0;
+    else if (strcmp(key, "MpStage") == 0) VrMpStage = ival;
+    else if (strcmp(key, "MpWeaponSet") == 0) VrMpWeaponSet = ival;
+    else if (strcmp(key, "MpChr") == 0) VrMpChr = ival;
+    else if (strcmp(key, "MpVisibility") == 0) VrMpVisibility = ival != 0;
+    else if (strcmp(key, "HostEqualization") == 0) VrHostEqualization = ival != 0;
+    else if (strcmp(key, "HostLatencyCapMs") == 0) VrHostLatencyCapMs = ival < 0 ? 0 : ival > 80 ? 80 : ival;
+    else if (strcmp(key, "MpFriendlyFire") == 0) VrMpFriendlyFire = ival != 0;
+    else if (strcmp(key, "MpFunFlags") == 0) VrMpFunFlags = ival >= 0 && ival <= 7 ? ival : 0;
+    else if (strcmp(key, "MpGunSize") == 0) VrMpGunSize = ival >= 0 && ival <= 2 ? ival : 0;
+    else if (strcmp(key, "MpVoiceMode") == 0) VrMpVoiceMode = ival == 1 ? 1 : 0;
+    else if (strcmp(key, "MpScenario") == 0) VrMpScenario = ival;
+    else if (strcmp(key, "MpLength") == 0) VrMpLength = ival;
+    else if (strcmp(key, "MpHealth") == 0) VrMpHealth = ival;
+    else if (strcmp(key, "MpDual") == 0) VrMpDual = ival;
+    else if (strcmp(key, "MpLoadouts") == 0) VrMpLoadouts = ival != 0;
+    else if (strcmp(key, "MpNextRound") == 0) VrMpNextRound = ival;
+    else if (strcmp(key, "MpFavStages") == 0) VrMpFavStages = (unsigned)ival;
+    else if (strcmp(key, "MpFavSets") == 0) VrMpFavSets = (unsigned)ival;
+    else if (strncmp(key, "MpCustom", 8) == 0 && key[8] >= '1' && key[8] <= '4') VrMpCustom[key[8] - '1'] = ival;
+    else if (strncmp(key, "MpLoadout", 9) == 0 && key[9] >= '1' && key[9] <= '4') VrMpLoadout[key[9] - '1'] = ival;
+    else if (strcmp(key, "ScreenCurved") == 0) VrScreenCurved = ival != 0;
+    /* written as integers ("EvenMovement=0"), so they must be read here: the float
+     * branch below never sees a value without a decimal point */
+    else if (strcmp(key, "EvenMovement") == 0) VrEvenMovement = ival != 0 ? 1 : 0;
+    else if (strcmp(key, "SmoothStairs") == 0) VrSmoothStairs = ival != 0 ? 1 : 0;
+    else if (strcmp(key, "SwayStrength") == 0) VrSwayStrength = ival <= 0 ? 0.0f : 1.0f;
+    /* DisplayHz replaces RefreshRate, whose 120 was only ever the old default
+     * (no option set it): the new default, 90, applies to existing installs. */
+    else if (strcmp(key, "DisplayHz") == 0) VrRefreshRate = ival < 0 ? 0 : ival;
+    else if (strcmp(key, "MusicVolume") == 0) VrMusicVolume = ival <= 0 ? 0.0f : (ival >= 1 ? 1.0f : (float)ival);
+    else if (strcmp(key, "VoiceVolume") == 0) VrVoiceVolume = ival <= 0 ? 0.0f : (ival >= 1 ? 1.0f : (float)ival);
+    else if (strcmp(key, "SfxVolume") == 0) VrSfxVolume = ival <= 0 ? 0.0f : 1.0f;
+    else return false;
+    return true;
+}
+
+// One "Key=number" line for the keys kept as floats; false: not one of them.
+static bool vrSettingsLoadFloat(const char *key, float fval, int *gunOffRead, float gunOff[3])
+{
+    if (strcmp(key, "Vibration") == 0) inputRumbleSetStrength(0, fval);
+    else if (strcmp(key, "StereoCrosshair") == 0) {
+        if (fval < HUD_STEREO_DEPTH_MIN) fval = HUD_STEREO_DEPTH_MIN;
+        if (fval > HUD_STEREO_DEPTH_MAX) fval = HUD_STEREO_DEPTH_MAX;
+        VrStereoCrosshair = fval;
+    }
+    else if (strcmp(key, "HudDistance") == 0) {
+        if (fval < HUD_DISTANCE_MIN) fval = HUD_DISTANCE_MIN;
+        if (fval > HUD_DISTANCE_MAX) fval = HUD_DISTANCE_MAX;
+        VrHudDistance = fval;
+    }
+    else if (strcmp(key, "WorldScale") == 0) {
+        if (fval < WORLDSCALE_MIN) fval = WORLDSCALE_MIN;
+        if (fval > WORLDSCALE_MAX) fval = WORLDSCALE_MAX;
+        VrSetWorldScale = fval;
+    }
+    else if (strcmp(key, "PlayerHeight") == 0) {
+        if (fval < PLAYERHEIGHT_MIN) fval = PLAYERHEIGHT_MIN;
+        if (fval > PLAYERHEIGHT_MAX) fval = PLAYERHEIGHT_MAX;
+        VrPlayerHeight = fval;
+    }
+    else if (strcmp(key, "SnapTurn") == 0) {
+        if (fval < 0.0f) fval = 0.0f;
+        if (fval > 90.0f) fval = 90.0f;
+        VrUseSnapTurn = fval;
+    }
+    else if (strcmp(key, "ArmElbowTuck") == 0) VrArmElbowTuck = fval;
+    else if (strcmp(key, "ArmBodyFollow") == 0) VrArmBodyFollow = fval;
+    else if (strcmp(key, "GunOffX") == 0) { gunOff[0] = fval; *gunOffRead = 1; }
+    else if (strcmp(key, "GunOffY") == 0) { gunOff[1] = fval; *gunOffRead = 1; }
+    else if (strcmp(key, "GunOffZ") == 0) { gunOff[2] = fval; *gunOffRead = 1; }
+    else if (strcmp(key, "ScreenDistance") == 0) {
+        if (fval < VR_SCREEN_DISTANCE_MIN) fval = VR_SCREEN_DISTANCE_MIN;
+        if (fval > VR_SCREEN_DISTANCE_MAX) fval = VR_SCREEN_DISTANCE_MAX;
+        VrScreenDistance = fval;
+    }
+    else if (strcmp(key, "ComfortVignette") == 0) {
+        if (fval < 0.0f) fval = 0.0f;
+        if (fval > 1.0f) fval = 1.0f;
+        VrComfortVignette = fval;
+    }
+    else if (strcmp(key, "EvenMovement") == 0) VrEvenMovement = fval != 0.0f ? 1 : 0;
+    else if (strcmp(key, "SmoothStairs") == 0) VrSmoothStairs = fval != 0.0f ? 1 : 0;
+    else if (strcmp(key, "SwayStrength") == 0) {
+        if (fval < 0.0f) fval = 0.0f;
+        if (fval > 1.0f) fval = 1.0f;
+        VrSwayStrength = fval;
+    }
+    else if (strcmp(key, "MotionThrowPitch") == 0) {
+        if (fval < -45.0f) fval = -45.0f;
+        if (fval > 45.0f) fval = 45.0f;
+        VrMotionThrowPitch = fval;
+    }
+    else if (strcmp(key, "MotionThrowGazeAssist") == 0) {
+        if (fval < 0.0f) fval = 0.0f;
+        if (fval > 1.0f) fval = 1.0f;
+        VrMotionThrowGazeAssist = fval;
+    }
+    else if (strcmp(key, "MotionThrowStrength") == 0) {
+        if (fval < 0.2f) fval = 0.2f;
+        if (fval > 3.0f) fval = 3.0f;
+        VrMotionThrowStrength = fval;
+    }
+    else if (strcmp(key, "ScreenHeight") == 0) {
+        if (fval < -VR_SCREEN_HEIGHT_MAX) fval = -VR_SCREEN_HEIGHT_MAX;
+        if (fval > VR_SCREEN_HEIGHT_MAX) fval = VR_SCREEN_HEIGHT_MAX;
+        VrScreenHeight = fval;
+    }
+    else if (strcmp(key, "ScreenFov") == 0) {
+        if (fval < VR_SCREEN_FOV_MIN) fval = VR_SCREEN_FOV_MIN;
+        if (fval > VR_SCREEN_FOV_MAX) fval = VR_SCREEN_FOV_MAX;
+        VrScreenFov = fval;
+    }
+    else if (strcmp(key, "MusicVolume") == 0) {
+        if (fval < 0.0f) fval = 0.0f;
+        if (fval > 1.0f) fval = 1.0f;
+        VrMusicVolume = fval;
+    }
+    else if (strcmp(key, "VoiceVolume") == 0) {
+        if (fval < 0.0f) fval = 0.0f;
+        if (fval > 1.0f) fval = 1.0f;
+        VrVoiceVolume = fval;
+    }
+    else if (strcmp(key, "SfxVolume") == 0) {
+        if (fval < 0.0f) fval = 0.0f;
+        if (fval > 1.0f) fval = 1.0f;
+        VrSfxVolume = fval;
+    }
+    else return false;
+    return true;
+}
+
 extern "C" void vrSettingsLoad(void)
 {
     s_settingsLoaded = true;   // with no file yet, the defaults are the settings
@@ -210,153 +366,23 @@ extern "C" void vrSettingsLoad(void)
         // then swallowed by this branch and never loaded (GoldenEye fix).
         const char *eq = strchr(line, '=');
         const bool looksFloat = eq != NULL && strchr(eq, '.') != NULL;
+        bool handled = false;
         if (!looksFloat && sscanf(line, "%63[^=]=%d", key, &ival) == 2) {
-            if (strcmp(key, "ManualReloading") == 0) VrManualReloading = ival != 0;
-            else if (strcmp(key, "LaserDotForAll") == 0) VrlaserDotForALL = ival != 0;
-            else if (strcmp(key, "SeatedMode") == 0) VrSeatedMode = ival != 0;
-            else if (strcmp(key, "MotionThrowing") == 0) VrMotionThrowing = ival != 0;
-            else if (strcmp(key, "WeaponRecoil") == 0) VrWeaponRecoil = (ival != 0);
-            else if (strcmp(key, "StickClickToCrouch") == 0) VrStickClickToCrouch = (ival != 0);
-            else if (strcmp(key, "AimNoLean") == 0) VrAimNoLean = (ival != 0);
-            else if (strcmp(key, "PauseHub") == 0) VrPauseHub = (ival != 0);
-            else if (strcmp(key, "TwoHandedAiming") == 0) VrTwoHandAim = (ival != 0);
-            else if (strcmp(key, "LeftHandedMode") == 0) VrLeftHandedMode = (ival != 0);
-            else if (strcmp(key, "SwapJoysticks") == 0) VrSwapJoysticks = (ival != 0);
-            else if (strcmp(key, "AimSteadying") == 0) VrAimSteady = ival < 0 ? 0 : ival > 2 ? 2 : ival;
-            else if (strcmp(key, "ShowStats") == 0) VrShowStats = (ival != 0);
-            else if (strcmp(key, "GunSizeCheat") == 0) VrGunSizeCheat = ival < 0 ? 0 : ival > 2 ? 2 : ival;
-            else if (strcmp(key, "UnlockAll") == 0) VrUnlockAll = ival != 0;
-            else if (strcmp(key, "HideArms") == 0) VrHideArms = (ival != 0);
-            else if (strcmp(key, "MatchCharacterHeight") == 0) VrMatchCharacterHeight = (ival != 0);
-            else if (strcmp(key, "FistClench") == 0) VrFistClench = ival;
-            else if (strcmp(key, "PlayMode") == 0) VrPlayMode = ival != 0 ? VR_PLAYMODE_STEREO : VR_PLAYMODE_SCREEN;
-            else if (strcmp(key, "MicMuted") == 0) VrMicMuted = ival != 0;
-            else if (strcmp(key, "MpStage") == 0) VrMpStage = ival;
-            else if (strcmp(key, "MpWeaponSet") == 0) VrMpWeaponSet = ival;
-            else if (strcmp(key, "MpChr") == 0) VrMpChr = ival;
-            else if (strcmp(key, "MpVisibility") == 0) VrMpVisibility = ival != 0;
-            else if (strcmp(key, "HostEqualization") == 0) VrHostEqualization = ival != 0;
-            else if (strcmp(key, "HostLatencyCapMs") == 0) VrHostLatencyCapMs = ival < 0 ? 0 : ival > 80 ? 80 : ival;
-            else if (strcmp(key, "MpFriendlyFire") == 0) VrMpFriendlyFire = ival != 0;
-            else if (strcmp(key, "MpFunFlags") == 0) VrMpFunFlags = ival >= 0 && ival <= 7 ? ival : 0;
-            else if (strcmp(key, "MpGunSize") == 0) VrMpGunSize = ival >= 0 && ival <= 2 ? ival : 0;
-            else if (strcmp(key, "MpVoiceMode") == 0) VrMpVoiceMode = ival == 1 ? 1 : 0;
-            else if (strcmp(key, "MpScenario") == 0) VrMpScenario = ival;
-            else if (strcmp(key, "MpLength") == 0) VrMpLength = ival;
-            else if (strcmp(key, "MpHealth") == 0) VrMpHealth = ival;
-            else if (strcmp(key, "MpDual") == 0) VrMpDual = ival;
-            else if (strcmp(key, "MpLoadouts") == 0) VrMpLoadouts = ival != 0;
-            else if (strcmp(key, "MpNextRound") == 0) VrMpNextRound = ival;
-            else if (strcmp(key, "MpFavStages") == 0) VrMpFavStages = (unsigned)ival;
-            else if (strcmp(key, "MpFavSets") == 0) VrMpFavSets = (unsigned)ival;
-            else if (strncmp(key, "MpCustom", 8) == 0 && key[8] >= '1' && key[8] <= '4') VrMpCustom[key[8] - '1'] = ival;
-            else if (strncmp(key, "MpLoadout", 9) == 0 && key[9] >= '1' && key[9] <= '4') VrMpLoadout[key[9] - '1'] = ival;
-            else if (strcmp(key, "ScreenCurved") == 0) VrScreenCurved = ival != 0;
-            /* written as integers ("EvenMovement=0"), so they must be read here: the float
-             * branch below never sees a value without a decimal point */
-            else if (strcmp(key, "EvenMovement") == 0) VrEvenMovement = ival != 0 ? 1 : 0;
-            else if (strcmp(key, "SmoothStairs") == 0) VrSmoothStairs = ival != 0 ? 1 : 0;
-            else if (strcmp(key, "SwayStrength") == 0) VrSwayStrength = ival <= 0 ? 0.0f : 1.0f;
-            /* DisplayHz replaces RefreshRate, whose 120 was only ever the old default
-             * (no option set it): the new default, 90, applies to existing installs. */
-            else if (strcmp(key, "DisplayHz") == 0) VrRefreshRate = ival < 0 ? 0 : ival;
-            else if (strcmp(key, "MusicVolume") == 0) VrMusicVolume = ival <= 0 ? 0.0f : (ival >= 1 ? 1.0f : (float)ival);
-            else if (strcmp(key, "VoiceVolume") == 0) VrVoiceVolume = ival <= 0 ? 0.0f : (ival >= 1 ? 1.0f : (float)ival);
-            else if (strcmp(key, "SfxVolume") == 0) VrSfxVolume = ival <= 0 ? 0.0f : 1.0f;
+            handled = vrSettingsLoadInt(key, ival);
         }
-            // 2. OTHERWISE, is it a floating-point number (%f)?
-        else if (sscanf(line, "%63[^=]=%f", key, &fval) == 2) {
-            if (strcmp(key, "Vibration") == 0) inputRumbleSetStrength(0, fval);
-            else if (strcmp(key, "StereoCrosshair") == 0) {
-                if (fval < HUD_STEREO_DEPTH_MIN) fval = HUD_STEREO_DEPTH_MIN;
-                if (fval > HUD_STEREO_DEPTH_MAX) fval = HUD_STEREO_DEPTH_MAX;
-                VrStereoCrosshair = fval;
-            }
-            else if (strcmp(key, "HudDistance") == 0) {
-                if (fval < HUD_DISTANCE_MIN) fval = HUD_DISTANCE_MIN;
-                if (fval > HUD_DISTANCE_MAX) fval = HUD_DISTANCE_MAX;
-                VrHudDistance = fval;
-            }
-            else if (strcmp(key, "WorldScale") == 0) {
-                if (fval < WORLDSCALE_MIN) fval = WORLDSCALE_MIN;
-                if (fval > WORLDSCALE_MAX) fval = WORLDSCALE_MAX;
-                VrSetWorldScale = fval;
-            }
-            else if (strcmp(key, "PlayerHeight") == 0) {
-                if (fval < PLAYERHEIGHT_MIN) fval = PLAYERHEIGHT_MIN;
-                if (fval > PLAYERHEIGHT_MAX) fval = PLAYERHEIGHT_MAX;
-                VrPlayerHeight = fval;
-            }
-            else if (strcmp(key, "SnapTurn") == 0) {
-                if (fval < 0.0f) fval = 0.0f;
-                if (fval > 90.0f) fval = 90.0f;
-                VrUseSnapTurn = fval;
-            }
-            else if (strcmp(key, "ArmElbowTuck") == 0) VrArmElbowTuck = fval;
-            else if (strcmp(key, "ArmBodyFollow") == 0) VrArmBodyFollow = fval;
-            else if (strcmp(key, "GunOffX") == 0) { gunOff[0] = fval; gunOffRead = true; }
-            else if (strcmp(key, "GunOffY") == 0) { gunOff[1] = fval; gunOffRead = true; }
-            else if (strcmp(key, "GunOffZ") == 0) { gunOff[2] = fval; gunOffRead = true; }
-            else if (strcmp(key, "ScreenDistance") == 0) {
-                if (fval < VR_SCREEN_DISTANCE_MIN) fval = VR_SCREEN_DISTANCE_MIN;
-                if (fval > VR_SCREEN_DISTANCE_MAX) fval = VR_SCREEN_DISTANCE_MAX;
-                VrScreenDistance = fval;
-            }
-            else if (strcmp(key, "ComfortVignette") == 0) {
-                if (fval < 0.0f) fval = 0.0f;
-                if (fval > 1.0f) fval = 1.0f;
-                VrComfortVignette = fval;
-            }
-            else if (strcmp(key, "EvenMovement") == 0) VrEvenMovement = fval != 0.0f ? 1 : 0;
-            else if (strcmp(key, "SmoothStairs") == 0) VrSmoothStairs = fval != 0.0f ? 1 : 0;
-            else if (strcmp(key, "SwayStrength") == 0) {
-                if (fval < 0.0f) fval = 0.0f;
-                if (fval > 1.0f) fval = 1.0f;
-                VrSwayStrength = fval;
-            }
-            else if (strcmp(key, "MotionThrowPitch") == 0) {
-                if (fval < -45.0f) fval = -45.0f;
-                if (fval > 45.0f) fval = 45.0f;
-                VrMotionThrowPitch = fval;
-            }
-            else if (strcmp(key, "MotionThrowGazeAssist") == 0) {
-                if (fval < 0.0f) fval = 0.0f;
-                if (fval > 1.0f) fval = 1.0f;
-                VrMotionThrowGazeAssist = fval;
-            }
-            else if (strcmp(key, "MotionThrowStrength") == 0) {
-                if (fval < 0.2f) fval = 0.2f;
-                if (fval > 3.0f) fval = 3.0f;
-                VrMotionThrowStrength = fval;
-            }
-            else if (strcmp(key, "ScreenHeight") == 0) {
-                if (fval < -VR_SCREEN_HEIGHT_MAX) fval = -VR_SCREEN_HEIGHT_MAX;
-                if (fval > VR_SCREEN_HEIGHT_MAX) fval = VR_SCREEN_HEIGHT_MAX;
-                VrScreenHeight = fval;
-            }
-            else if (strcmp(key, "ScreenFov") == 0) {
-                if (fval < VR_SCREEN_FOV_MIN) fval = VR_SCREEN_FOV_MIN;
-                if (fval > VR_SCREEN_FOV_MAX) fval = VR_SCREEN_FOV_MAX;
-                VrScreenFov = fval;
-            }
-            else if (strcmp(key, "MusicVolume") == 0) {
-                if (fval < 0.0f) fval = 0.0f;
-                if (fval > 1.0f) fval = 1.0f;
-                VrMusicVolume = fval;
-            }
-            else if (strcmp(key, "VoiceVolume") == 0) {
-                if (fval < 0.0f) fval = 0.0f;
-                if (fval > 1.0f) fval = 1.0f;
-                VrVoiceVolume = fval;
-            }
-            else if (strcmp(key, "SfxVolume") == 0) {
-                if (fval < 0.0f) fval = 0.0f;
-                if (fval > 1.0f) fval = 1.0f;
-                VrSfxVolume = fval;
+        // 2. OTHERWISE, is it a floating-point number (%f)? Also an integer value for a float key
+        // ("SnapTurn=45", "ComfortVignette=1": hand-edited, these were silently dropped) and a
+        // decimal one for an integer key ("DisplayHz=90.0").
+        if (!handled && sscanf(line, "%63[^=]=%f", key, &fval) == 2) {
+            int gunRead = 0;
+            handled = vrSettingsLoadFloat(key, fval, &gunRead, gunOff);
+            if (gunRead) gunOffRead = true;
+            if (!handled && fval == floorf(fval) && fabsf(fval) < 2.0e9f) {
+                handled = vrSettingsLoadInt(key, (int)fval);
             }
         }
-            // 3. OTHERWISE, is it text (%s)?
-        else if (sscanf(line, "%63[^=]=%255[^\n]", key, sval) == 2) {
+        // 3. OTHERWISE, is it text (%s)?
+        if (!handled && sscanf(line, "%63[^=]=%255[^\n]", key, sval) == 2) {
             if (strcmp(key, "ActiveTexturePack") == 0) {
                 strncpy(g_ActiveExtTexPack, sval, FS_MAXPATH - 1);
                 g_ActiveExtTexPack[FS_MAXPATH - 1] = '\0';
