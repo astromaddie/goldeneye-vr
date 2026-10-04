@@ -1527,6 +1527,20 @@ static void vr_copy_menu_layer(GLuint srcTex, GLuint dstTex, GLuint& srcFbo, GLu
 }
 
 
+// vr-diag.ini diag_gl and dump_hud (Frame build): the copy's GL errors, and the capture's image
+extern "C" void gevrGlProbe(const char* where);   // gfx_opengl.cpp
+static void vr_menu_layer_diag(const char* name, GLuint srcTex)
+{
+    char where[64];
+    snprintf(where, sizeof(where), "the HUD layer copy (%s)", name);
+    gevrGlProbe(where);
+#ifdef GEVR_STEAM_FRAME
+    vrFrameHudDump(name, srcTex, -1, (int)g_menuSwapchainWidth, (int)g_menuSwapchainHeight);
+#else
+    (void)srcTex;
+#endif
+}
+
 static void vr_update_menu_swapchain_L()
 {
     uint32_t imageIndex = 0;
@@ -1542,6 +1556,7 @@ static void vr_update_menu_swapchain_L()
 
     static GLuint srcFboL = 0, dstFboL = 0;
     vr_copy_menu_layer(srcTex, dstTex, srcFboL, dstFboL);
+    vr_menu_layer_diag("vr-hud-L.bmp", srcTex);
 
     XrSwapchainImageReleaseInfo releaseInfo{ XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
     xrReleaseSwapchainImage(g_menuSwapchain, &releaseInfo);
@@ -1559,6 +1574,7 @@ static void vr_update_menu_swapchain_R()
     static GLuint srcFbo = 0, dstFbo = 0;
     vr_copy_menu_layer(gfx_opengl_get_vr_menu_texture_R(),
                        g_menuSwapchainImagesR[imageIndex].image, srcFbo, dstFbo);
+    vr_menu_layer_diag("vr-hud-R.bmp", gfx_opengl_get_vr_menu_texture_R());
 
     XrSwapchainImageReleaseInfo releaseInfo = {XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
     xrReleaseSwapchainImage(g_menuSwapchainR, &releaseInfo);
@@ -1579,6 +1595,7 @@ static void vr_update_menu_swapchain_H()
 
     static GLuint srcFboH = 0, dstFboH = 0;
     vr_copy_menu_layer(srcTex, dstTex, srcFboH, dstFboH);
+    vr_menu_layer_diag("vr-hud-H.bmp", srcTex);
 
     XrSwapchainImageReleaseInfo releaseInfo = {XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
     xrReleaseSwapchainImage(g_menuSwapchainH, &releaseInfo);
@@ -1596,6 +1613,7 @@ static void vr_update_menu_swapchain_P()
 
     static GLuint srcFboP = 0, dstFboP = 0;
     vr_copy_menu_layer(gfx_opengl_get_vr_menu_texture_P(), g_menuSwapchainImagesP[imageIndex].image, srcFboP, dstFboP);
+    vr_menu_layer_diag("vr-hud-P.bmp", gfx_opengl_get_vr_menu_texture_P());
 
     XrSwapchainImageReleaseInfo releaseInfo = {XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
     xrReleaseSwapchainImage(g_menuSwapchainP, &releaseInfo);

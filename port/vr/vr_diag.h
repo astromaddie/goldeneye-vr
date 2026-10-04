@@ -33,6 +33,10 @@ typedef struct GevrDiag {
     int   watch_backdrop;      /* the paused world behind the watch's screen: 0 = default (on), 1 = on, -1 = off (black, as before) */
     int   dump_scope;          /* on the Nth game frame that draws a scope: vr-dumps/vr-scope.bmp (its target), vr-scope-lens.bmp
                                   (the lens image the compositor gets) and vr-scope.txt (GL state), 0 = off */
+    int   diag_gl;             /* [vr-gl]: glGetError around every game draw and at each pass's end, the pass that raised
+                                  it named (first time at once, then counts every 300 game frames), 0 = off */
+    int   dump_hud;            /* on the Nth game frame that submits a HUD capture: vr-dumps/vr-hud-L/R/H/P.bmp (the
+                                  captures' images as copied to their quad layers), 0 = off */
 } GevrDiag;
 
 /* The settings; the file is read on the first call. Never NULL. */

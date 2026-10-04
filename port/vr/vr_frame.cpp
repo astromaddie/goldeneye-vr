@@ -237,6 +237,26 @@ extern "C" void vrFrameScopeNote(int hand, const char *line)
     FLOG("[vr-dump] scope dump complete: vr-dumps/vr-scope.bmp, vr-scope-lens.bmp, vr-scope.txt");
 }
 
+/* ------------------------------------------------------------ dump_hud */
+
+extern "C" void vrFrameHudDump(const char *name, unsigned tex, int layer, int w, int h)
+{
+    static unsigned frames;
+    static uint64_t lastFrame = ~0ull, dumpFrame = ~0ull;
+    const GevrDiag *d = gevrDiag();
+    if (d->dump_hud <= 0 || tex == 0) return;
+    if (s_xrFrame != lastFrame) {
+        lastFrame = s_xrFrame;
+        if (++frames == (unsigned)d->dump_hud) dumpFrame = s_xrFrame;
+    }
+    if (s_xrFrame != dumpFrame) return;
+    unsigned lit = 0;
+    GLenum err = GL_NO_ERROR;
+    const bool ok = dump_texture(name, tex, layer, w, h, &lit, &err);
+    FLOG("[vr-dump] hud: %s %dx%d %s, lit_pct=%u (layer %d, XR frame %llu, stage %d)", name, w, h,
+         ok ? "written" : "failed", lit, layer, (unsigned long long)s_xrFrame, bossGetStageNum());
+}
+
 extern "C" void vrFrameDumpFrameBegin(uint64_t xrFrame)
 {
     const GevrDiag *d = gevrDiag();

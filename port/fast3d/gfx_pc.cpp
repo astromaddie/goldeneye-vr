@@ -154,6 +154,7 @@ extern "C" void gevrMat4Mul(const float a[16], const float b[16], float out[16])
 extern "C" int gevrVrRedrawDelta(float out[16]);   // vr_openxr.cpp
 extern "C" int gevrVrRedrawHandDelta(int hand, float out[16]);
 extern "C" void gevrVrMarkRedrawn(void);
+extern "C" void gevrGlProbe(const char* where);   // gfx_opengl.cpp, vr-diag.ini diag_gl
 #ifdef GEVR_STEAM_FRAME
 // vr_launcher.cpp: the in-game VR settings, drawn into their own texture; 0 while they are closed
 extern "C" int gevrVrSettingsOverlayDraw(unsigned *tex, int *w, int *h);
@@ -4789,6 +4790,7 @@ extern "C" void gfx_run(Gfx* commands) {
             s_termInPage = s_termInLcd = false;
         }
 #endif
+        gevrGlProbe("work between game frames (layer copies, redraws)");   // vr-diag.ini diag_gl
         // Screen pass: the game's frame into the off-screen target.
         bool screenRendered = false;
         bool overlayUp = false;
@@ -4805,6 +4807,9 @@ extern "C" void gfx_run(Gfx* commands) {
                 gVrFlatPass = false;
                 gevr_screen_pass = false;
                 screenRendered = true;
+#ifdef GEVR_STEAM_FRAME
+                gevrGlProbe(s_termPass ? "the watch terminal's page pass" : "the screen pass");
+#endif
             }
 #ifdef GEVR_STEAM_FRAME
             if (termPass) {
@@ -4825,6 +4830,7 @@ extern "C" void gfx_run(Gfx* commands) {
             if (screenRendered && gevrVrSettingsOverlayDraw(&overlayTex, &overlayW, &overlayH)) {
                 overlayUp = true;
             }
+            gevrGlProbe("the VR settings overlay (ImGui)");
 #endif
             // Whatever goes into the eye buffers from here uses the real per-eye numbers.
             set_target(eyeW, eyeH);
@@ -4845,8 +4851,10 @@ extern "C" void gfx_run(Gfx* commands) {
 #ifdef GEVR_STEAM_FRAME
                 // The paused watch: the frozen world behind its screen.
                 gevr_watch_backdrop();
+                gevrGlProbe("the paused world behind the watch");
 #endif
                 vr_pointer_draw();
+                gevrGlProbe("the menu pointer");
                 // Otherwise the eye buffers stay black behind the screen
                 // (cleared by vr_begin_eye_render); the pause-hub grid was
                 // tried as a surround and rejected.
@@ -4863,9 +4871,12 @@ extern "C" void gfx_run(Gfx* commands) {
                 gfx_flush();
                 gfx_vr_eye_record(false, nullptr, false);
                 gevrVrMarkEyesRendered(1);
+                gevrGlProbe("the eye pass (and its HUD captures)");
                 gfx_vr_scope_render();   // issue #40: the world again, through the sniper scope
+                gevrGlProbe("the scope pass");
                 s_gevrLastVignette = gevrStereoVignette();
                 gfx_opengl_draw_vignette(s_gevrLastVignette);
+                gevrGlProbe("the vignette");
 
                 if (VrPauseHub && VrIsPaused) {
                     float vp[2][16];
@@ -4876,6 +4887,7 @@ extern "C" void gfx_run(Gfx* commands) {
                     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fboBeforeHub);
 
                     vr_hub_render(vp);
+                    gevrGlProbe("the pause hub");
                 }
 
                 gfx_flush();
@@ -4906,6 +4918,7 @@ extern "C" void gfx_run(Gfx* commands) {
 
             // 5) Release + submit
             vr_end_eye_render();
+            gevrGlProbe("the eye release and frame submit (menu, HUD and scope layers)");
 
             // 6) The finished game frame goes to the compositor as a quad layer.
 #ifdef GEVR_STEAM_FRAME
@@ -4914,9 +4927,11 @@ extern "C" void gfx_run(Gfx* commands) {
                 // face never shows, the whole frame after a few tries), the VR settings to the dock
                 if (screenRendered && termCapture && (termMeasured || s_termUnmeasured > 10)) {
                     gevrTermPresent(vr_screen_target_tex(), (int)passW, (int)passH, s_termCrop, termMeasured ? 1 : 0);
+                    gevrGlProbe("the watch terminal's panel copy");
                 }
                 if (overlayUp) {
                     gevrTermDockPresent(overlayTex, overlayW, overlayH);
+                    gevrGlProbe("the VR settings dock copy");
                 }
             } else
 #endif
@@ -4925,6 +4940,7 @@ extern "C" void gfx_run(Gfx* commands) {
             } else if (screenRendered) {
                 vr_screen_present(vr_screen_target_tex(), (int)targetW, (int)targetH);
             }
+            gevrGlProbe("the virtual screen's copy");
         } else if (!screenRendered && (VrEvenMovement || VrSmoothStairs || VrSwayStrength > 0.0f)) {
             // No eye pass for this game frame: the kept draws are the tick before's,
             // and the body's move is now measured from this one's camera. Nothing
@@ -4964,6 +4980,7 @@ extern "C" int gfx_vr_redraw_frame(void) {
         gfx_rapi->start_draw_to_framebuffer(0, 1.0f);
         gevr_watch_backdrop();
         vr_pointer_draw();
+        gevrGlProbe("the paused world's in-between redraw");
         vr_end_eye_render();
         vrFramePerfSetRedraw(0);
         return 1;
@@ -4997,6 +5014,7 @@ extern "C" int gfx_vr_redraw_frame(void) {
         gfx_vr_eye_replay(world, delta, have0 ? hand[0] : nullptr, have1 ? hand[1] : nullptr);
     }
     gfx_opengl_draw_vignette(s_gevrLastVignette);
+    gevrGlProbe("the in-between redraw");
     vr_end_eye_render();
 #ifdef GEVR_STEAM_FRAME
     vrFramePerfSetRedraw(0);

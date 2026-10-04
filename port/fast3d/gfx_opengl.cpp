@@ -2358,6 +2358,8 @@ GLuint gfx_vr_scope_texture(int hand)
     return (hand == 0 || hand == 1) && s_scopeDrawn[hand] ? s_scopeTex[hand] : 0;
 }
 
+static void gevr_gl_trace_draw(bool after);   // vr-diag.ini diag_gl
+
 static void gfx_opengl_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_vbo_num_tris) {
 
     const bool lineMode = netActiveLineMode() && !gForceFlatShaderForMenu && !gVrFlatPass &&
@@ -2467,7 +2469,9 @@ static void gfx_opengl_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_
     }
     s_uniCacheValid = use_multiview;   /* without multiview the eye uniforms are never cached */
 
+    gevr_gl_trace_draw(false);
     gevr_issue_draw(first, (GLsizei)(3 * buf_vbo_num_tris), s_decalZ && !gevrRoomDl, lineMode);
+    gevr_gl_trace_draw(true);
 }
 
 /* the draw itself, with the decal band (the eye pass, and its redraw: issue #53) */
@@ -4035,6 +4039,107 @@ GLuint gfx_opengl_get_vr_menu_texture_P(void) {
     return framebuffers[gVrMenuPFb].clrbuf;
 }
 //---
+
+// ============================================================================
+// vr-diag.ini diag_gl: which pass leaves a GL error (Frame build)
+// ============================================================================
+/*
+ * The game's programs declare num_views = 2, and a draw with one into a target
+ * of another view count is GL_INVALID_OPERATION (GL_OVR_multiview). Mesa (Zink
+ * on the Steam Frame) enforces it and drops the draw; Quest's driver let it
+ * pass. glGetError keeps only the first error, so a later check (the scope's
+ * gl_error_before) can't say where it came from. With diag_gl every game draw
+ * is bracketed (an error before it belongs to the state calls since the last
+ * check) and gevrGlProbe names the passes between: the first time a place
+ * raises an error is logged at once with the bound target's view count, then
+ * the counts every 300 game frames. Off, it costs a flag test per draw.
+ */
+#ifdef GEVR_STEAM_FRAME
+#include <string>
+#include "../vr/vr_diag.h"
+#ifndef GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_NUM_VIEWS_OVR
+#define GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_NUM_VIEWS_OVR 0x9630
+#endif
+static int s_glTrace = -1;
+struct GevrGlTraceEntry { unsigned count; unsigned total; GLenum err; };
+static std::map<std::string, GevrGlTraceEntry> s_glTraceSeen;
+static uint32_t s_glTraceWindowStart;
+
+static bool gevr_gl_trace_on(void)
+{
+    if (s_glTrace < 0) {
+        s_glTrace = gevrDiag()->diag_gl ? 1 : 0;
+    }
+    return s_glTrace != 0;
+}
+
+static const char* gevr_gl_trace_target(void)
+{
+    const int fb = (int)current_framebuffer;
+    if (fb == 0) return gVrFlatPass ? "screen pass (virtual screen / watch page)" : "eye pass";
+    if (fb == gVrMenuFb)  return "capture L (left-hand HUD, menus)";
+    if (fb == gVrMenuRFb) return "capture R (ammo counter)";
+    if (fb == gVrMenuHFb) return "capture H (head-locked HUD: health, messages, prompts)";
+    if (fb == gVrMenuPFb) return "capture P (weapon panel)";
+    return "another framebuffer";
+}
+
+static void gevr_gl_trace_note(const std::string& where, GLenum err)
+{
+    GevrGlTraceEntry& e = s_glTraceSeen[where];
+    if (e.total == 0) {
+        GLint drawFbo = 0, views = -1;
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &drawFbo);
+        if (drawFbo != 0) {
+            glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                                  GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_NUM_VIEWS_OVR, &views);
+        }
+        for (int n = 0; n < 8 && glGetError() != GL_NO_ERROR; n++) {}
+        vr_log("[vr-gl] first 0x%x at %s (game frame %u, draw fbo %d, color views %d; the programs have 2)",
+               err, where.c_str(), frame_count, drawFbo, views);
+    }
+    e.count++;
+    e.total++;
+    e.err = err;
+}
+
+/* every game draw, before (after == false) and after it */
+static void gevr_gl_trace_draw(bool after)
+{
+    if (!gevr_gl_trace_on()) return;
+    const GLenum err = glGetError();
+    if (err != GL_NO_ERROR) {
+        gevr_gl_trace_note(std::string(gevr_gl_trace_target()) + (after ? ": a draw" : ": state calls before a draw"), err);
+        for (int n = 0; n < 8 && glGetError() != GL_NO_ERROR; n++) {}
+    }
+}
+
+extern "C" void gevrGlProbe(const char* where)
+{
+    if (!gevr_gl_trace_on()) return;
+    const GLenum err = glGetError();
+    if (err != GL_NO_ERROR) {
+        gevr_gl_trace_note(std::string("end of ") + where, err);
+        for (int n = 0; n < 8 && glGetError() != GL_NO_ERROR; n++) {}
+    }
+    if (frame_count - s_glTraceWindowStart >= 300) {
+        std::string line;
+        for (auto& kv : s_glTraceSeen) {
+            if (kv.second.count == 0) continue;
+            char buf[64];
+            snprintf(buf, sizeof(buf), " x%u (0x%x); ", kv.second.count, kv.second.err);
+            line += kv.first + buf;
+            kv.second.count = 0;
+        }
+        vr_log("[vr-gl] game frames %u-%u: %s", s_glTraceWindowStart, frame_count,
+               line.empty() ? "no GL errors" : line.c_str());
+        s_glTraceWindowStart = frame_count;
+    }
+}
+#else
+static void gevr_gl_trace_draw(bool) {}
+extern "C" void gevrGlProbe(const char*) {}
+#endif
 
 
 

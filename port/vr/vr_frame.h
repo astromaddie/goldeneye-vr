@@ -55,6 +55,11 @@ void vrFrameScopeDumpLens(int hand, unsigned image, int w, int h, const char *st
 /* A line for vr-scope.txt and the log (the lens layer as submitted), only right after the lens dump. */
 void vrFrameScopeNote(int hand, const char *line);
 
+/* ---- dump_hud: the HUD captures (vr_diag.h) ------------------------------------ */
+/* vr_openxr.cpp, after a HUD capture's copy to its quad layer: on the Nth XR frame that copies one,
+ * writes vr-dumps/<name> from layer `layer` of array texture `tex` (-1: a plain 2D texture). */
+void vrFrameHudDump(const char *name, unsigned tex, int layer, int w, int h);
+
 /* ---- [vr-perf] -------------------------------------------------------------- */
 enum { VRPERF_RENDER = 0, VRPERF_REDRAW = 1, VRPERF_END = 2 };
 /* xrWaitFrame returned: `waitMs` is how long it blocked, `periodMs` the runtime's display period. */
