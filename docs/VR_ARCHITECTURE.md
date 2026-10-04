@@ -82,6 +82,7 @@ verified. "Dump" means the unattended eye dumps of section 8.
 | World draws between ticks (even movement, smooth stairs) | `gfx_opengl.cpp` `gfx_vr_eye_live`, `gfx_vr_eye_replay` | The world's draws take the body's move to the frame's display time through the `uReproj` branch; hand-tagged draws keep their hand delta, screen-space HUD markers are skipped | host test of the matrix; not yet on the device |
 | Menus, cutscenes, intro/death cameras | `vr_screen.cpp`, `gevrStereoFrame` `want` | Not stereo: the screen quad, world-locked at 2.5 m | dump (`vr-hud.bmp`) |
 | The paused watch (Frame build) | `gevrVrWatchScreen`, `gevr_watch_backdrop` | Its own curved screen, world-locked 1.5 m ahead; behind it the last stereo frame replayed from the head's pose (`uReproj` 2: hand-held draws left out, screen-locked HUD dropped), dimmed | host test of the placement; verified unattended 2026-10-04 (flat quad: no cylinder layer offered) |
+| Sniper scope lens (and the laser's, the KF7/AR33 magnifier) | `gfx_opengl.cpp` `gfx_vr_scope_*`, `vr_openxr.cpp` scope layer | The world's draws kept from the eye pass, drawn again through the scope's camera into a 512² two-layer target attached as two views (the image is layer 0; the shader drops view 1), copied round into a quad layer on the gun. A one-view target is invalid with the game's `num_views = 2` programs: Mesa drops every draw (the lens was black on the Frame), Quest's driver let it pass | verified unattended 2026-10-04 (`dump_scope` in Dam: the target holds the zoomed world, no GL error; the same draw into a one-view target is 0x502); not worn |
 | Effect billboards and hit sparks | `gunfire.c`, `explosion.c` | Hit spark 4 units off the wall, smoke 16 (the game's 26/100 floated) | read (STATUS.md) |
 | Fog | `bgfog.c`, `GEVR_FAR_EXTEND` | Far edge pushed out with the rooms | read |
 | Water, glass | `sky.c` `WaterConcavity` 0 in stereo | Floats through the pre-projected path; reflections in view space | read (issue #30) |
@@ -335,6 +336,7 @@ Settings...** at the bottom of the watch's Game Options page (`options.c`; A on 
 | `diag_turn` | stereo play turns smoothly at this % of the stick (-100..100), whatever the snap setting |
 | `dump_watch_frame` | the `dump_frame` files N XR frames after the paused watch's screen is placed, eyes and screen from one game frame |
 | `watch_backdrop` | `0`: no paused world behind the watch (black, as before); default on |
+| `dump_scope` | on the Nth game frame that draws a scope: `vr-dumps/vr-scope.bmp` (the scope target's layer 0), `vr-scope-lens.bmp` (the round lens image as handed to the compositor) and `vr-scope.txt` (target and status, view count, draws kept and in view, the pass's GL error, the same draw's error into a one-view target, camera sanity, the copy and the layer as submitted). Give the rifle with `gevr_cheat.txt` `hold17`; force_render's parked gun hand is enough. In Dam the game goes back to the PP7 about 0.7 s later, so keep N under about 30 (10 works) |
 
 `[vr-move]` every 2 s while the stereo camera moves: `step_cm mean/max/sd` (the shown camera's
 step per display frame, the head's own motion not included; with even movement the sd should be near
@@ -368,7 +370,7 @@ and the docs use. Keys not listed have no standard counterpart.
 | `smooth_stairs` | `SmoothStairs` | 0/1; Frame default 1, Quest 0 (port-specific) |
 | `sway_strength` | `SwayStrength` | 0..1, 0 = off (default); experimental, port-specific |
 | `camera_shake` | none | the game's head bob and sway are off in stereo; `SwayStrength` is an opt-in experiment |
-| `force_render`, `diag_yaw`, `dump_frame`, `timing`, `diag_walk`, `diag_turn`, `dump_watch_frame`, `watch_backdrop` | `vr-diag.ini` | not in the game's ini |
+| `force_render`, `diag_yaw`, `dump_frame`, `timing`, `diag_walk`, `diag_turn`, `dump_watch_frame`, `watch_backdrop`, `dump_scope` | `vr-diag.ini` | not in the game's ini |
 
 ## 8. Status
 
@@ -398,6 +400,8 @@ States: **played in headset**, **verified unattended**, **not started**.
 | Smooth stairs: eased steps up and down, no landing dip | built, ran on the device without errors (Dam's start has no stairs, so the easing itself is host-tested only). Not worn |
 | Walking sway and stair bob (experimental, off by default) | built, not yet run on the device (host-tested) |
 | `[vr-move]`, `diag_walk`, `diag_turn` | built, not yet run on the device |
+| Sniper scope lens shows the zoomed world (two-view scope target) | verified unattended 2026-10-04 (`dump_scope`, parked gun hand, `hold17`): target and lens image show the zoomed world, layer submitted. Not worn; the lens's place on the gun and the red sight not checked |
+| Some draw earlier in the frame than the scope pass leaves `GL_INVALID_OPERATION` pending (`vr-scope.txt` `gl_error_before=0x502`, 2026-10-04): possibly another one-view target drawn with the two-view programs | not traced yet |
 | Depth submission, foveation, HUD quad, roomscale acceptance, spatial audio | not started |
 
 Why "not yet run": after the commit of the diagnostics the Frame dropped off the network at about
@@ -440,11 +444,12 @@ launcher's Show stats); did the controllers' tracking/hand poses look right.
 
 ## 10. Wear feedback 2026-10-04
 
-Four findings from the user's session on the Frame:
+Five findings from the user's session on the Frame:
 
 | Finding | Status |
 | --- | --- |
 | The gun, its shots and the crosshair aimed 30-45 degrees below where the hand points (the grip map was tuned on Touch) | fixed from the aim pose, see "The gun's aim" in section 5; built, not yet run on the device |
 | VR settings could not be opened in game; Menu + View held did nothing | in-game VR settings with three openers (section 5); built, not yet run on the device |
 | Holding Menu offered "back to the launcher", and yes ended the Steam-launched app ("Restarting into the launcher ... Exited!") | on the Frame the hold opens VR settings, and every restart path goes to the title screen with a note; built, not yet run on the device |
+| The sniper rifle's scope lens was just black | the scope drew into a one-view target with the game's two-view programs, which Mesa rejects (`GL_INVALID_OPERATION`, every draw dropped); now a two-view target like the eye buffers. Verified unattended 2026-10-04 with `dump_scope`; not worn |
 | The watch | option D chosen 2026-10-04, built (8c3565a); verified unattended the same day in Dam: screen placed straight ahead, 1.5 m away and 1.4 m wide; the frozen world replays dimmed with the hands and gun hidden; 90 fps while paused; resume closes it. SteamVR offered no cylinder layer, so the screen is the flat quad (`curved=0`). Not worn |
