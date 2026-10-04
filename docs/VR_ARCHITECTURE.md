@@ -52,7 +52,8 @@ Frame-only.
 - Stereo gameplay renders both eyes in one pass into the two layers of one swapchain image
   (multiview). Menus, the watch, cutscenes and flat play render into a screen target and are
   submitted as a world-locked quad layer (`vr_screen.cpp`); the eye buffers then only carry the
-  pointer.
+  pointer, except behind the paused watch, where they hold the frozen, dimmed world (section 5,
+  "The paused watch").
 - Session states are logged by name. `shouldRender=false` (headset off the head) still ticks the
   game and submits empty frames; `force_render` draws anyway.
 - Quitting is SteamVR's job (standard section 1, the user 2026-10-03): no menu offers it, and the
@@ -79,7 +80,8 @@ verified. "Dump" means the unattended eye dumps of section 8.
 | HUD, crosshair, messages | `VR_HUD_CAPTURE_*_H` tags, `tx_HUD` per-eye offset | Drawn in the eye pass with the HUD's own per-eye parallax (not a quad layer yet) | dump (HUD present) |
 | First-person gun, arms, casings | `bondview2.c` `gevrStereoGunMatrix`, `VR_CULL_OFF_*` tags | Placed from the grip pose in view space at the game frame's camera; redraw frames carry them with the hand (`gevrVrRedrawHandDelta`) | read; parked-hand dump |
 | World draws between ticks (even movement, smooth stairs) | `gfx_opengl.cpp` `gfx_vr_eye_live`, `gfx_vr_eye_replay` | The world's draws take the body's move to the frame's display time through the `uReproj` branch; hand-tagged draws keep their hand delta, screen-space HUD markers are skipped | host test of the matrix; not yet on the device |
-| Menus, watch, cutscenes, intro/death cameras | `vr_screen.cpp`, `gevrStereoFrame` `want` | Not stereo: the screen quad, world-locked at 2.5 m | dump (`vr-hud.bmp`) |
+| Menus, cutscenes, intro/death cameras | `vr_screen.cpp`, `gevrStereoFrame` `want` | Not stereo: the screen quad, world-locked at 2.5 m | dump (`vr-hud.bmp`) |
+| The paused watch (Frame build) | `gevrVrWatchScreen`, `gevr_watch_backdrop` | Its own curved screen, world-locked 1.5 m ahead; behind it the last stereo frame replayed from the head's pose (`uReproj` 2: hand-held draws left out, screen-locked HUD dropped), dimmed | host test of the placement; not yet on the device |
 | Effect billboards and hit sparks | `gunfire.c`, `explosion.c` | Hit spark 4 units off the wall, smoke 16 (the game's 26/100 floated) | read (STATUS.md) |
 | Fog | `bgfog.c`, `GEVR_FAR_EXTEND` | Far edge pushed out with the rooms | read |
 | Water, glass | `sky.c` `WaterConcavity` 0 in stereo | Floats through the pre-projected path; reflections in view space | read (issue #30) |
@@ -229,6 +231,52 @@ basis - would swing the handle about 8 cm out of the hand at a 40 degree offset 
 X/Y keep what the Touch left X/Y did, so a mission plays the same on both; the choice is open for
 the wearer to change (the questions in section 9).
 
+### The paused watch (Frame build; watch option D "Better Big Screen", chosen 2026-10-04)
+
+The mockup is `scratchpad/mockups/watch-options.html`, section D. Opening (Menu, or the wrist-raise
+gesture), navigating (D-pad or stick, A/B, grips turn pages), closing (Menu, or B on the top page)
+and the zoomed N64 watch image are as before; only where it is shown changed.
+
+- **Its own screen, world-locked.** `gevrStereoFrame` calls `gevrVrWatchScreen` (the Quest build
+  keeps `gevrVrScreenHeadLock`, the screen pinned 8 degrees below the view). As the watch comes up the
+  screen is placed straight ahead at the head's yaw (yaw only: a head tilted down or rolled does not
+  tilt it), 1.5 m away, 1.4 m wide (53.5 degrees), its centre 10 cm below the eyes, curved
+  (cylinder layer) when the runtime has `XR_KHR_composition_layer_cylinder`, else the flat quad
+  (`vr_screen_math.c`, host-tested in `test_vr_screen.c`). It stays put until the watch closes, and
+  is placed again on the next pause and on any recentre. The player's own screen size, distance and
+  shape (`ScreenDistance`, `ScreenFov`, `ScreenCurved`) stay for menus and cutscenes; both-grip moves
+  and stick resizes leave the watch's screen alone. Log: `[vr] watch screen placed yaw= dist= width=
+  curved=`.
+- **The world stays in stereo behind it.** The last stereo frame's draws (kept for the in-between
+  redraw, issue #53) are kept again on the pause's first frame (`gfx_vr_frozen_take`): the vertex
+  ring segments they use are copied on the GPU into a buffer of the same layout before the ring can
+  write them again (checked with per-segment fill counts), the shader programs are checked against
+  a generation count (a texture filter change deletes them: the backdrop stops). Every XR frame,
+  the game's and the in-between ones, draws them from the head's pose (`gevrVrFrozenDelta`, the
+  redraw's matrix against the kept camera views). Left out: what the hands hold (gun, arms, the
+  watch arm), which would hang frozen in mid-air, and the screen-locked HUD and crosshair (dropped
+  in the vertex shader, `uReproj` 2). Then a multiply pass darkens it to 40% (display-encoded
+  values, the mockup's 60% dim) and toward 20% at the edges of the view (a soft vignette from 25
+  to 60 degrees off centre); alpha becomes 1. No depth writes, no `gl_FragDepth`. Log: `[vr] paused
+  world: frozen replay (dim 0.40, edges 0.20; N draws (M held by the hands left out), K of 3 vertex
+  segments copied)`, or `[vr] paused world: none (why)` and the old black surround.
+- **Layer order.** With the paused world in the eye image (`g_eyeBackdrop` 1) the projection layer
+  goes first, opaque, and the watch's screen over it. When something reads the pointer (the VR
+  settings opened from the watch: 2) the screen's surface is cleared to transparent in the eye
+  image (`vr_screen_cut_eyes`) and the usual order is kept (screen, then the eye layer with alpha),
+  so the beam draws in front. A projection layer is always submitted.
+- **Diagnostics.** `vr-diag.ini` `dump_watch_frame=N` dumps the eyes and the screen from one game
+  frame N XR frames after the watch's screen is placed; `watch_backdrop=0` turns the paused world
+  off (black behind the watch, as before).
+
+Unattended check (coordinator): `vr-diag.ini` with `boot_stage=33`, `dump_watch_frame=180`,
+`timing=1` (and `force_render=1` if the headset is not worn); once Dam is running in stereo, write
+`1000 0 0 6` to `~/Documents/GoldenEye/gevr_input.txt` (START for 6 frames). Expect in logcat
+`[vr] watch screen placed ...`, `[vr] paused world: frozen replay ...` and `[vr-dump] wrote
+vr-dumps/vr-eye0.bmp, vr-eye1.bmp (... opaque_pct=100/100 screen=...)`: the eye images show Dam
+darkened, with no gun, hands or HUD, and slightly offset between the eyes; `vr-hud.bmp` the watch.
+`[vr-perf]` `redraw` now counts the paused frames' world too.
+
 ### In-game VR settings (Frame build; `vr_launcher.cpp`, end of file)
 
 Openers: Menu + View held 0.5 s (`vr_system.cpp`), Menu held 1.5 s (`input.c`), and **VR
@@ -243,8 +291,11 @@ Settings...** at the bottom of the watch's Game Options page (`options.c`; A on 
   pass and before the eye pass; ImGui's backend restores the GL state it touches, and the framebuffer,
   viewport, clear colour, scissor and colour mask are restored around it. The settings texture goes to
   the virtual screen instead of the game's frame. `gevrStereoFrame` forces screen mode while they are
-  up (and drops the watch's head lock, so the laser hits the screen where it is drawn); the screen is
-  placed in front of you as they open.
+  up; the screen is placed in front of you as they open. Opened from the watch they show on the
+  watch's own screen (same place and shape, the paused world still behind; the screen's place is cut
+  out of the eye layer so the laser draws in front of it). A front layer 10 cm closer at native
+  resolution, as the option D mockup drew it, was left out: one screen is simpler and already sharp
+  (the settings texture is 1280x960).
 - **Input.** The launcher's own feeders (`feedGamepad`, `feedPointer`): the laser and trigger, the
   sticks or D-pad and A, both grips to move the screen. B, Y, a short View press or Menu close a page,
   then the settings. Buttons already down when they open do not answer until let go; the game gets
@@ -282,6 +333,8 @@ Settings...** at the bottom of the watch's Game Options page (`options.c`; A on 
 | `timing` | `[vr-perf]` GPU ms (`GL_EXT_disjoint_timer_query`, read late, never waited on) |
 | `diag_walk` | stereo play holds the move stick: `1` forward (C-up), `-1` back |
 | `diag_turn` | stereo play turns smoothly at this % of the stick (-100..100), whatever the snap setting |
+| `dump_watch_frame` | the `dump_frame` files N XR frames after the paused watch's screen is placed, eyes and screen from one game frame |
+| `watch_backdrop` | `0`: no paused world behind the watch (black, as before); default on |
 
 `[vr-move]` every 2 s while the stereo camera moves: `step_cm mean/max/sd` (the shown camera's
 step per display frame, the head's own motion not included; with even movement the sd should be near
@@ -292,7 +345,7 @@ range of the between-ticks fraction; `1.00..1.00` when even movement is off), `c
 `[vr-perf]` every 10 s (standard line, sfvr formatter) with `sim`, `render`, `redraw`, `end` CPU ms,
 the multiview pass as both `eye=` values, `gpu=` ms when `timing` is on, `missed` (a frame over 1.5 display
 periods), then `wait=` and `period=`. Other markers: `[vr-frame]`, `[vr-sys]`, `[vr-dump]`, `[vr-diag]`,
-`[VR_CTRL]`, `stereo:`.
+`[VR_CTRL]`, `stereo:`, `[vr] watch screen placed`, `[vr] paused world:`.
 
 ## 7. Settings key map (the port's `goldeneye-vr.ini` names to the standard's)
 
@@ -315,7 +368,7 @@ and the docs use. Keys not listed have no standard counterpart.
 | `smooth_stairs` | `SmoothStairs` | 0/1; Frame default 1, Quest 0 (port-specific) |
 | `sway_strength` | `SwayStrength` | 0..1, 0 = off (default); experimental, port-specific |
 | `camera_shake` | none | the game's head bob and sway are off in stereo; `SwayStrength` is an opt-in experiment |
-| `force_render`, `diag_yaw`, `dump_frame`, `timing`, `diag_walk`, `diag_turn` | `vr-diag.ini` | not in the game's ini |
+| `force_render`, `diag_yaw`, `dump_frame`, `timing`, `diag_walk`, `diag_turn`, `dump_watch_frame`, `watch_backdrop` | `vr-diag.ini` | not in the game's ini |
 
 ## 8. Status
 
@@ -338,6 +391,7 @@ States: **played in headset**, **verified unattended**, **not started**.
 | Menu hold 1.5 s opens VR settings (no restart prompt on the Frame) | built, not yet run on the device |
 | Online Exit, idle kick: title screen and a note instead of a restart | built, not yet run on the device |
 | Settings loader: integer and decimal spellings of every key | host-tested (round trip of every key the VR settings change) |
+| Paused watch, option D: world-locked curved screen, frozen dimmed stereo world behind it | built, not yet run on the device (host-tested placement) |
 | Menu laser pointer from the aim pose (Frame build) | built, not yet run on the device. Worn report 2026-10-03 on the first build: the pointer did not line up with the controller (it pointed along the grip pose's -Y, tuned on Touch) |
 | Worn: scale, HUD distance, comfort, control labels | first wear 2026-10-03 on the phase-1 build (no Frame profile): the menu pointer was off; nothing else reported yet |
 | Even movement: body drawn between ticks at display time, even walking speed, no run boost | verified unattended (2026-10-04, 90 Hz, Dam, `diag_walk`): `[vr-move]` steady-speed windows step a constant 5.67 cm a frame (sd 0.00) at 509 cm/s; 90 fps, 0 missed. Not worn |
@@ -370,7 +424,9 @@ file is removed if you ask for `--diag-reset`).
    points (wear feedback 2026-10-04: they were 30-45 degrees low)?
 5. Cutscene (1 min): the intro and a mission-end cutscene on the virtual screen: distance, size,
    comfort.
-6. Pause/watch and VR settings (2 min): R Menu opens the watch; B and a short View press go back.
+6. Pause/watch and VR settings (2 min): R Menu opens the watch, on a curved screen straight ahead
+   that stays put when you look away, with Dam dimmed behind it in stereo (comfortable? too dark?);
+   B and a short View press go back.
    Hold Menu + View half a second: VR settings over a paused game, a click in both hands. Change the
    turning, close with B. Hold Menu alone 1.5 s: the same settings. On the watch: Game Options >
    VR Settings... and A.
@@ -391,4 +447,4 @@ Four findings from the user's session on the Frame:
 | The gun, its shots and the crosshair aimed 30-45 degrees below where the hand points (the grip map was tuned on Touch) | fixed from the aim pose, see "The gun's aim" in section 5; built, not yet run on the device |
 | VR settings could not be opened in game; Menu + View held did nothing | in-game VR settings with three openers (section 5); built, not yet run on the device |
 | Holding Menu offered "back to the launcher", and yes ended the Steam-launched app ("Restarting into the launcher ... Exited!") | on the Frame the hold opens VR settings, and every restart path goes to the title screen with a note; built, not yet run on the device |
-| The watch | a mockup of a redesign is in progress (separate work, `scratchpad/`) |
+| The watch | option D chosen 2026-10-04, built: its own world-locked curved screen, the paused world in stereo behind it (section 5, "The paused watch"); not yet run on the device |
