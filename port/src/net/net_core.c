@@ -3007,9 +3007,22 @@ static void netRoundTick(void) {
             s_last_local_activity_us = 0;
             s_last_idle_warning_sec = 0;
             extern void gevrLobbySessionStopped(void);
-            extern void gevrRestartToLauncher(void);
             gevrLobbySessionStopped();
-            gevrRestartToLauncher();
+#ifdef GEVR_STEAM_FRAME
+            {
+                /* no restart into the launcher on the Frame (it ended the app): the title
+                 * screen, and the VR settings saying what happened (port/vr/vr_launcher.cpp) */
+                extern void gevrFrameBackToTitle(const char *notice);
+                gevrFrameBackToTitle("You were idle for 5 minutes, so you left the online game.\n\n"
+                    "Online games are joined in the launcher, which opens as GoldenEye VR starts. "
+                    "To join another, quit from the SteamVR menu and start GoldenEye VR again.");
+            }
+#else
+            {
+                extern void gevrRestartToLauncher(void);
+                gevrRestartToLauncher();
+            }
+#endif
             return;
         }
 

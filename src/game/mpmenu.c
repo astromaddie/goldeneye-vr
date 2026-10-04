@@ -35,6 +35,9 @@ extern const char *netGetSlotName(int slot);
 extern int netVoiceSlotSpeaking(unsigned char slot);
 extern void gevrLobbySessionStopped(void);
 extern void gevrRestartToLauncher(void);
+#ifdef GEVR_STEAM_FRAME
+extern void gevrFrameBackToTitle(const char *notice);   /* port/vr/vr_launcher.cpp */
+#endif
 extern float VrMusicVolume;
 extern float VrVoiceVolume;
 extern void vrSettingsSave(void);
@@ -1398,7 +1401,15 @@ void mpwatchMenuTick(void)
 #ifdef GEVR
                         if (netIsActive()) {
                             gevrLobbySessionStopped();
+#ifdef GEVR_STEAM_FRAME
+                            /* no restart into the launcher on the Frame (it ended the app):
+                             * the title screen, and a note on how to join another game */
+                            gevrFrameBackToTitle("You left the online game.\n\n"
+                                "Online games are joined in the launcher, which opens as GoldenEye VR starts. "
+                                "To join another, quit from the SteamVR menu and start GoldenEye VR again.");
+#else
                             gevrRestartToLauncher();
+#endif
                             return;
                         }
 #endif
