@@ -2385,6 +2385,20 @@ static void gevrSettingsColumns(bool inGame, int *mode, GevrComfortChoice &comfo
             if (ImGui::SliderFloat("Distance", &dist, VR_SCREEN_DISTANCE_MIN, VR_SCREEN_DISTANCE_MAX, "%.1f m")) {
                 vr_screen_resize(dist, VrScreenFov);
             }
+#ifdef GEVR_STEAM_FRAME
+            // The paused watch (WatchStyle; vr_watch_terminal.cpp): latched as the watch opens.
+            int watch = VrWatchStyle ? 1 : 0;
+            ImGui::TextUnformatted("Paused watch:");
+            ImGui::SameLine();
+            ImGui::RadioButton("Terminal##watch", &watch, 1);
+            ImGui::SameLine();
+            ImGui::RadioButton("Big screen##watch", &watch, 0);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Terminal: the watch's pages on a sharp panel just ahead.\n"
+                                  "Big screen: the zoomed watch on a screen. From the next pause.");
+            }
+            VrWatchStyle = watch;
+#endif
         }
         ImGui::Spacing();
         ImGui::TextColored(gold, "AIM STEADYING (stereo)");

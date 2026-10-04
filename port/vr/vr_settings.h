@@ -51,6 +51,8 @@ extern int VrSmoothStairs;
 extern float VrSwayStrength;
 // Display refresh rate in Hz, 0 = the runtime's default (vr_openxr.cpp).
 extern int VrRefreshRate;
+// The paused watch (Frame build): 1 = the Q-Branch terminal, 0 = the big screen (vr_watch_terminal.h).
+extern int VrWatchStyle;
 
 // Your standing EYE height in cm -- where your eyes are off the floor, roughly
 // 13 cm below the top of your head, not your stature. That is what the headset

@@ -76,6 +76,13 @@ int VrSmoothStairs = 0;
 #endif
 float VrSwayStrength = 0.0f;   /* experimental walking sway and stair bob, 0 = off .. 1 */
 int VrRefreshRate = 90;    /* Hz (launcher: 72, 90, 120), 0 = the runtime's default (vr_openxr.cpp vr_request_refresh_rate) */
+/* The paused watch on the Frame (standard key watch_style): 1 = the Q-Branch terminal (option C,
+ * vr_watch_terminal.cpp), 0 = the big screen (option D). The Quest build never reads it. */
+#ifdef GEVR_STEAM_FRAME
+int VrWatchStyle = 1;
+#else
+int VrWatchStyle = 0;
+#endif
 
 /* --- Physical setup ------------------------------------------------------ */
 
