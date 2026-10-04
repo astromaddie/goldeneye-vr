@@ -533,6 +533,9 @@ static void gevrCheatProbe(s32 inlevel)
     {
         return;
     }
+#ifdef GEVR_STEAM_FRAME
+    path = "gevr_cheat.txt";   /* the data folder (the working directory): ~/Documents/GoldenEye on the Frame */
+#endif
     fp = fopen(path, "r");
     if (fp == NULL)
     {
