@@ -34,6 +34,12 @@ done
     "$here/test_vr_screen.c" "$root/port/vr/vr_screen_math.c" -lm -o "$out/test_vr_screen"
 "$out/test_vr_screen"
 
+# the 3D cinema for cutscenes (port/vr/vr_cinema_math.c): placement, the per-eye projection views
+# through the screen's corners, the stereo shear against two real off-axis cameras, fade, latch
+"$cc" -std=c11 -Wall -Wextra -Werror -I"$root/port/vr" \
+    "$here/test_vr_cinema.c" "$root/port/vr/vr_cinema_math.c" "$root/port/vr/vr_screen_math.c" -lm -o "$out/test_vr_cinema"
+"$out/test_vr_cinema"
+
 # goldeneye-vr.ini: every key the in-game VR settings change, save -> load (port/vr/vr_settings.cpp,
 # vr_settings_defaults.c, vr_haptics.cpp, vr_log.c: the production files)
 "$cc" -std=c11 -Wall -Wextra -DGEVR_STEAM_FRAME=1 -I"$root/include" -I"$root/port/include" \

@@ -41,6 +41,9 @@ typedef struct GevrDiag {
                                   left eye, on its line of sight (dump_scope then dumps the eyes too), 0 = parked */
     float render_scale;        /* this run's eye resolution scale instead of the ini's RenderScale, 0 = the ini's */
     int   msaa;                /* this run's eye MSAA samples (1, 2, 4) instead of the ini's EyeMsaa, 0 = the ini's */
+    int   dump_cinema_frame;   /* the dump_frame files this many XR frames after the 3D cinema is placed (a cutscene
+                                  starts), with vr-dumps/vr-cinema0.bmp and vr-cinema1.bmp (its two eye images), 0 = off */
+    float cinema_sep_mm;       /* the 3D cinema's camera separation in mm, 0 = the default (64) */
 } GevrDiag;
 
 /* The settings; the file is read on the first call. Never NULL. */

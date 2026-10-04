@@ -306,6 +306,16 @@ extern "C" void vrFrameDumpWatchPlaced(void)
     }
 }
 
+extern "C" void vrFrameDumpCinemaPlaced(void)
+{
+    const GevrDiag *d = gevrDiag();
+    if (d->dump_cinema_frame > 0 && !s_dumpDone && s_watchDumpAt == 0) {
+        s_watchDumpAt = s_xrFrame + (uint64_t)d->dump_cinema_frame;
+        FLOG("[vr-dump] armed for the 3D cinema: XR frame %llu (%d after the screen was placed)",
+             (unsigned long long)s_watchDumpAt, d->dump_cinema_frame);
+    }
+}
+
 extern "C" void vrFrameDumpEyes(unsigned tex, int w, int h)
 {
     static GLuint fbo = 0;

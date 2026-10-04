@@ -6,6 +6,10 @@
 #include "gevr_surface_math.h"
 #include "vr_motion.h"
 #include "vr_aim_math.h"
+#ifdef GEVR_STEAM_FRAME
+#include "vr_cinema.h"
+#include "vr_cinema_math.h"
+#endif
 #endif
 #include <ultra64.h>
 #ifdef GEVR
@@ -880,6 +884,53 @@ static void gevrTexpackMessage(s32 inlevel)
 #ifdef GEVR_STEAM_FRAME
 extern int gevrVrSettingsIsOpen(void);   /* port/vr/vr_launcher.cpp */
 extern void gevrVrWatchScreen(s32 on);   /* port/vr/vr_openxr.cpp: the paused watch's screen */
+extern int VrCutsceneMode;               /* port/vr/vr_settings_defaults.c: 1 the 3D cinema, 0 flat */
+
+/*
+ * The 3D cinema (port/vr/vr_cinema.h, standard.md section 4 "Cutscenes", the user 2026-10-04).
+ * GoldenEye's in-engine cutscenes are its scripted cameras, g_CameraMode other than first person:
+ * the mission intro flyby (INTRO), the fade and swirl round into Bond (FADESWIRL, SWIRL), the death
+ * replay (DEATH_CAM_SP) and the mission-end cameras the AI scripts cut to (POSEND: the Dam's
+ * bungee jump, the Train, Cradle...). There are no letterboxed in-play camera shots: play is
+ * CAMERAMODE_FP throughout. They used to go flat to the virtual screen; now, with CutsceneMode=1,
+ * the game's camera is drawn twice and shown on a world-locked screen with depth. The head never
+ * becomes the scripted camera. A latch (lessons.md 71) keeps a hand-over through CAMERAMODE_NONE
+ * from bouncing the view; play (FP), stereo or leaving the level end it at once.
+ */
+s32 g_gevrCinema;   /* this frame's cutscene is on the 3D cinema: hudmsgBottomRender draws into its band */
+static GevrCinemaLatch s_gevrCinemaLatch;
+
+static void gevrCinemaFrame(s32 inlevel, struct player *pl, s32 stereo)
+{
+    static u32 s_loggedFlat;   /* the cutscene whose flat reason was logged (lessons.md 48) */
+    extern bool netIsActive(void);
+    const s32 scripted = g_CameraMode == CAMERAMODE_INTRO || g_CameraMode == CAMERAMODE_FADESWIRL
+                      || g_CameraMode == CAMERAMODE_SWIRL || g_CameraMode == CAMERAMODE_DEATH_CAM_SP
+                      || g_CameraMode == CAMERAMODE_POSEND;
+    const s32 playing = stereo || !inlevel || g_CameraMode == CAMERAMODE_FP || g_CameraMode == CAMERAMODE_FP_NOINPUT;
+    const s32 on = gevrCinemaLatchStep(&s_gevrCinemaLatch, inlevel && pl != NULL && scripted, playing);
+    s32 cinema = FALSE;
+
+    if (on)
+    {
+        const s32 solo = getPlayerCount() == 1 && !netIsActive();
+        const s32 settings = gevrVrSettingsIsOpen();
+        const s32 watch = pl != NULL && pl->watch_animation_state != 0;
+        const s32 ready = gevrVrReady();
+
+        cinema = VrCutsceneMode != 0 && solo && !settings && !watch && ready;
+        if (!cinema && s_loggedFlat != s_gevrCinemaLatch.starts)
+        {
+            s_loggedFlat = s_gevrCinemaLatch.starts;
+            sysLogPrintf(LOG_NOTE, "[vr] cinema 3D: cutscene held flat (camera mode %d): CutsceneMode=%d solo=%d "
+                         "(players %d, online %d) vr_settings_open=%d watch=%d vr_ready=%d",
+                         (int) g_CameraMode, VrCutsceneMode, solo, (int) getPlayerCount(), netIsActive() ? 1 : 0,
+                         settings, watch, ready);
+        }
+    }
+    g_gevrCinema = cinema;
+    gevrVrCinema(on ? (cinema ? 2 : 1) : 0, GEVR_UNITS_PER_METRE * D_800364CC, (int) g_CameraMode);
+}
 #endif
 void gevrStereoFrame(s32 inlevel)
 {
@@ -910,6 +961,10 @@ void gevrStereoFrame(s32 inlevel)
         && !gevrVrSettingsIsOpen()
 #endif
         ;
+
+#ifdef GEVR_STEAM_FRAME
+    gevrCinemaFrame(inlevel, pl, want);   /* the 3D cinema (above); every change fades from black */
+#endif
 
 #ifdef GEVR_STEAM_FRAME
     /* Watch option D (2026-10-04): the paused watch gets its own curved screen,
@@ -15799,6 +15854,23 @@ Gfx* hudmsgBottomRender(Gfx* arg0)
                  * foot, below these, so they are not lifted for it) */
                 gDPNoOpTag(arg0++, 0x56570000); /* VR_HUD_CAPTURE_BEGIN_H */
             }
+#ifdef GEVR_STEAM_FRAME
+            /*
+             * The 3D cinema: never over the stereo picture at another depth (lessons.md 72), but
+             * centred in the black band under it. The band is the screen's bottom fifth
+             * (GEVR_CINEMA_BAND_FRAC), drawn into its own target (gfx_pc.cpp, vr_cinema.cpp).
+             */
+            else if (g_gevrCinema)
+            {
+                const s32 band = (viGetY() * 20) / 100;
+
+                view_left = (viGetX() - view_left_offset) / 2;
+                view_horiz = view_left + view_left_offset;
+                view_top = viGetY() - (band - view_top_offset) / 2;
+                gDPSetScissor(arg0++, G_SC_NON_INTERLACE, 0, 0, viGetX(), viGetY());
+                gDPNoOpTag(arg0++, VR_CINEMA_BAND_BEGIN);
+            }
+#endif
 #endif
             view_vert = view_top - view_top_offset;
             arg0 = draw_blackbox_to_screen(arg0, &view_left, &view_vert, &view_horiz, &view_top); /* PORT: addresses were cast to s32 */
@@ -15808,6 +15880,12 @@ Gfx* hudmsgBottomRender(Gfx* arg0)
             {
                 gDPNoOpTag(arg0++, 0x56570001); /* VR_HUD_CAPTURE_END_H */
             }
+#ifdef GEVR_STEAM_FRAME
+            else if (g_gevrCinema)
+            {
+                gDPNoOpTag(arg0++, VR_CINEMA_BAND_END);
+            }
+#endif
 #endif
         }
     }

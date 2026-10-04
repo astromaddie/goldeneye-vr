@@ -89,6 +89,13 @@ int VrWatchStyle = 0;
  * samples, 1 = off, 2 or 4, live. Chosen from measurements in Dam at 90 Hz (VR_ARCHITECTURE.md section 11). */
 float VrRenderScale = GEVR_FRAME_RENDER_SCALE;
 int VrMsaa = GEVR_FRAME_MSAA;
+/* In-engine cutscenes on the Frame (standard key cutscenes): 1 = the 3D cinema (vr_cinema.cpp, the
+ * standard's comfort default), 0 = flat on the virtual screen. The Quest build never reads it. */
+#ifdef GEVR_STEAM_FRAME
+int VrCutsceneMode = 1;
+#else
+int VrCutsceneMode = 0;
+#endif
 
 /* --- Physical setup ------------------------------------------------------ */
 

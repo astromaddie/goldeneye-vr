@@ -168,6 +168,9 @@ extern "C" int gevrVrSettingsOverlayDraw(unsigned *tex, int *w, int *h);
 #include "vr_diag.h"
 #include "vr_screen_math.h"
 #include "vr_watch_terminal.h"
+#include "vr_cinema.h"
+extern bool gVrCinemaPass;   // gfx_opengl.cpp: the screen pass drawn as the 3D cinema's two cameras
+static bool s_cinemaPass;    // this screen pass is the cinema pass (the band tags apply)
 #define GEVR_PAUSE_DIM   0.40f   // of the world's brightness (display-encoded values, as the mockup's 60% dim)
 #define GEVR_PAUSE_EDGE  0.50f   // ... times this at the edges of the view
 extern "C" int gevrVrWatchScreenUp(void);              // vr_openxr.cpp
@@ -4125,6 +4128,14 @@ static void gfx_run_dl(Gfx* cmd) {
                     case VR_WATCH_LCD_END:
                         s_termInLcd = tag_w1 == VR_WATCH_LCD_BEGIN;
                         break;
+
+                    case VR_CINEMA_BAND_BEGIN:   // the 3D cinema: the bottom messages into the band under the picture
+                    case VR_CINEMA_BAND_END:
+                        if (s_cinemaPass) {
+                            gfx_flush();
+                            gevrCinemaBand(tag_w1 == VR_CINEMA_BAND_BEGIN);
+                        }
+                        break;
 #endif
 
                     case VR_CULL_MIRROR_BEGIN:
@@ -4790,6 +4801,22 @@ extern "C" void gfx_run(Gfx* commands) {
             s_termInPage = s_termInLcd = false;
         }
 #endif
+#ifdef GEVR_STEAM_FRAME
+        /*
+         * A cutscene on the 3D cinema (port/vr/vr_cinema.h): the screen pass as two cameras - the
+         * per-eye offsets on world vertices (the shader's uVrFlat 2, and the CPU clip and backface
+         * tests through apply_offsets) - so the target's layer 0 is the left eye's picture and
+         * layer 1 the right's. gevrCinemaPresent hands them to the cinema's projection layer.
+         */
+        float cinemaOffsets[8];
+        const bool cinemaPass = screenMode && !termPass && gevrCinemaActive()
+            && gevrCinemaPassOffsets(g_viProjectionMatrixF[0][0], cinemaOffsets);
+        if (cinemaPass) {
+            apply_offsets(cinemaOffsets);
+        }
+#else
+        const bool cinemaPass = false;
+#endif
         gevrGlProbe("work between game frames (layer copies, redraws)");   // vr-diag.ini diag_gl
         // Screen pass: the game's frame into the off-screen target.
         bool screenRendered = false;
@@ -4801,14 +4828,26 @@ extern "C" void gfx_run(Gfx* commands) {
                 gevr_screen_pass = true;
                 gVrFlatPass = true;
                 gfx_rapi->start_draw_to_framebuffer(0, 1.0f);
+#ifdef GEVR_STEAM_FRAME
+                if (cinemaPass) {
+                    gevrCinemaPassBegin((int)passW, (int)passH);   // the band target, cleared
+                    gVrCinemaPass = s_cinemaPass = true;
+                }
+#endif
                 run_display_list();
                 gfx_flush();
+#ifdef GEVR_STEAM_FRAME
+                if (cinemaPass) {
+                    gevrCinemaPassEnd();
+                    gVrCinemaPass = s_cinemaPass = false;
+                }
+#endif
                 vr_screen_target_end();
                 gVrFlatPass = false;
                 gevr_screen_pass = false;
                 screenRendered = true;
 #ifdef GEVR_STEAM_FRAME
-                gevrGlProbe(s_termPass ? "the watch terminal's page pass" : "the screen pass");
+                gevrGlProbe(s_termPass ? "the watch terminal's page pass" : cinemaPass ? "the 3D cinema pass" : "the screen pass");
 #endif
             }
 #ifdef GEVR_STEAM_FRAME
@@ -4853,8 +4892,10 @@ extern "C" void gfx_run(Gfx* commands) {
                 gevr_watch_backdrop();
                 gevrGlProbe("the paused world behind the watch");
 #endif
-                vr_pointer_draw();
-                gevrGlProbe("the menu pointer");
+                if (!cinemaPass) {   // the cinema has nothing to point at: the eye layer stays clear over it
+                    vr_pointer_draw();
+                    gevrGlProbe("the menu pointer");
+                }
                 // Otherwise the eye buffers stay black behind the screen
                 // (cleared by vr_begin_eye_render); the pause-hub grid was
                 // tried as a surround and rejected.
@@ -4938,6 +4979,16 @@ extern "C" void gfx_run(Gfx* commands) {
             if (overlayUp) {
                 vr_screen_present_tex2d(overlayTex, overlayW, overlayH);
             } else if (screenRendered) {
+#ifdef GEVR_STEAM_FRAME
+                if (cinemaPass) {
+                    if (gevrCinemaPresent(vr_screen_target_tex(), (int)targetW, (int)targetH)) {
+                        gevrGlProbe("the 3D cinema's copy");
+                    } else {
+                        // no cinema image (its swapchain failed, logged there): the picture, flat
+                        vr_screen_present(vr_screen_target_tex(), (int)targetW, (int)targetH);
+                    }
+                } else
+#endif
                 vr_screen_present(vr_screen_target_tex(), (int)targetW, (int)targetH);
             }
             gevrGlProbe("the virtual screen's copy");
