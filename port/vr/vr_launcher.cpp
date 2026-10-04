@@ -14,7 +14,8 @@
  *    in the data directory, /sdcard/GEVR and /sdcard/Download; picking one
  *    copies it over data/ge.z64;
  *  - Stereo VR or the flat screen (VrPlayMode), right-stick turning, smooth or
- *    snap 30/45/90 (VrUseSnapTurn), the comfort vignette (VrComfortVignette);
+ *    snap 30/45/90 (VrUseSnapTurn), the comfort vignette (VrComfortVignette),
+ *    the Movement comfort page (VrEvenMovement, VrSmoothStairs, VrSwayStrength);
  *    saved to goldeneye-vr.ini with the game's own vrSettingsSave.
  *
  * Drawn with the vendored Dear ImGui (port/vr/imgui, OpenGL3 backend on GLES 3)
@@ -2395,6 +2396,7 @@ extern "C" void gevrLauncherRun(void)
         static bool mpPage = false;
         static bool hapticsPage = false;
         static bool throwingPage = false;
+        static bool movementPage = false;
         if (reportPage) {
             gevrReportPage(reportPage, reportCrash, gold, good, bad);
         } else if (hapticsPage) {
@@ -2403,6 +2405,59 @@ extern "C" void gevrLauncherRun(void)
             gevrMultiplayerPage(mpPage, start, gold, good, bad);
         } else if (modsPage) {
             gevrModsPage(modsPage, now, gold, good, bad);
+        } else if (movementPage) {
+            // Comfort locomotion (port/vr/vr_motion.h): each switch can be put back.
+            ImGui::TextColored(gold, "MOVEMENT COMFORT (stereo)");
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::TextWrapped("For walking with the stick. Your own head and hands are never delayed or smoothed.");
+            ImGui::PopStyleColor();
+            ImGui::Spacing();
+
+            bool even = VrEvenMovement != 0;
+            if (ImGui::Checkbox("Even movement", &even)) {
+                VrEvenMovement = even ? 1 : 0;
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Walking and smooth turning shown at the headset's full rate, at a steady speed\n"
+                                  "(no surge with each step, no run boost after 3 seconds). Off: as the game does it.");
+            }
+            bool stairs = VrSmoothStairs != 0;
+            if (ImGui::Checkbox("Smooth stairs", &stairs)) {
+                VrSmoothStairs = stairs ? 1 : 0;
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("The view glides up and down steps and slopes, and does not dip when you land.\n"
+                                  "Real drops still follow at once.");
+            }
+
+            ImGui::Spacing();
+            ImGui::TextColored(gold, "EXPERIMENTAL: WALKING SWAY");
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.70f);
+            float swayPct = VrSwayStrength * 100.0f;
+            if (ImGui::SliderFloat("##SwayStrength", &swayPct, 0.0f, 100.0f, swayPct < 0.5f ? "Off" : "Sway %.0f%%")) {
+                VrSwayStrength = swayPct < 0.5f ? 0.0f : swayPct / 100.0f;
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("A slight side-to-side sway as you walk, and a small bob on stairs.\n"
+                                  "An experiment: try it against Off and say which feels better.");
+            }
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            if (ImGui::Button("Reset to Defaults##movement")) {
+#ifdef GEVR_STEAM_FRAME
+                VrEvenMovement = 1;
+                VrSmoothStairs = 1;
+#else
+                VrEvenMovement = 0;
+                VrSmoothStairs = 0;
+#endif
+                VrSwayStrength = 0.0f;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Done##movement", ImVec2(-1, 0))) {
+                movementPage = false;
+            }
         } else if (throwingPage) {
             ImGui::TextColored(gold, "MOTION THROWING SETTINGS");
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
@@ -2600,6 +2655,15 @@ extern "C" void gevrLauncherRun(void)
             ImGui::RadioButton("Snap 90", &turn, 3);
             ImGui::Spacing();
             ImGui::TextColored(gold, "COMFORT (stereo)");
+            // Movement comfort's page, on the heading's line: a small button is no
+            // taller than the text, and the page has no line to spare (below).
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Movement...")) {
+                movementPage = true;
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Even movement, smooth stairs, and the experimental walking sway");
+            }
             ImGui::Checkbox("Darken edges when moving", &vignetteOn);
             ImGui::BeginDisabled(!vignetteOn);
             ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.62f);
