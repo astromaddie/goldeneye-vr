@@ -2391,8 +2391,7 @@ static void gevrSettingsColumns(bool inGame, int *mode, GevrComfortChoice &comfo
 #ifdef GEVR_STEAM_FRAME
             // The paused watch (WatchStyle; vr_watch_terminal.cpp): latched as the watch opens.
             int watch = VrWatchStyle ? 1 : 0;
-            ImGui::TextUnformatted("Paused watch:");
-            ImGui::SameLine();
+            ImGui::TextUnformatted("Paused watch");   // own line: with both choices it overran the column
             ImGui::RadioButton("Terminal##watch", &watch, 1);
             ImGui::SameLine();
             ImGui::RadioButton("Big screen##watch", &watch, 0);
