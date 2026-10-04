@@ -4,6 +4,7 @@
 #include "gevr_scope.h"
 #include "gevr_surface_probe.h"
 #include "gevr_surface_math.h"
+#include "vr_motion.h"
 #endif
 #include <ultra64.h>
 #ifdef GEVR
@@ -324,6 +325,10 @@ void gevrVoiceListenerBasis(float forward[3], float up[3])
 
 static s32 s_gevrHeadValid;
 static f32 s_gevrLastHead[3];
+/* comfort locomotion (port/vr/vr_motion.h): what the head walked the body since the
+ * last published camera (not interpolated: the head already showed it), and a cut */
+static f32 s_gevrHeadWalkAcc[2];
+static s32 s_gevrMotionCut = TRUE;
 static f32 s_gevrHeadBaseY;
 /* Steam Frame (standard.md section 1): View held 1 s recentres but keeps the standing height
  * taken earlier; held 3 s it takes it again. A stereo switch or a level start still takes it. */
@@ -397,6 +402,8 @@ void gevrStereoHeadWalk(struct coord3d *move_offset)
 
     move_offset->x += d.x;
     move_offset->z += d.z;
+    s_gevrHeadWalkAcc[0] += d.x;
+    s_gevrHeadWalkAcc[1] += d.z;
 }
 
 /* The eye's rise (+) or duck (-) since recentre, world units. */
@@ -422,6 +429,7 @@ static f32 gevrStereoHeadHeight(void)
 /* Face the way the body faces: the current view becomes straight ahead. */
 static void gevrStereoRecenter(void)
 {
+    s_gevrMotionCut = TRUE;    /* the view jumps: nothing to draw between */
     s_gevrHeadValid = FALSE;   /* next tick takes this height as standing */
     s_gevrMenuHeadValid = FALSE;
     vr_align_with_game_angle(0.0f);
@@ -9931,6 +9939,18 @@ void bondviewProcessInput(s8 stick_x, s8 stick_y, u16 buttons, u16 oldbuttons)
         }
     }
 
+#ifdef GEVR
+    /*
+     * Even movement in stereo (port/vr/vr_motion.h): the run boost that creeps in
+     * after three seconds of full stick (1.0 to 1.25 at 0.01 a tick) is a speed
+     * change the wearer did not ask for; the speed comes from the stick alone.
+     * Online it stays, so everyone in a match keeps the same top speed.
+     */
+    if (g_gevrStereo && VrEvenMovement && !netIsActive())
+    {
+        g_CurrentPlayer->speedmaxtime60 = 0;
+    }
+#endif
     if (g_CurrentPlayer->speedmaxtime60 >= THREE_SECOND_TICKS)
     {
         if (g_CurrentPlayer->speedboost < SPEED_RUN_MAX)
@@ -12546,6 +12566,61 @@ coord3d *gevrEyePosition(void)
 }
 #endif
 
+#ifdef GEVR
+/*
+ * Comfort locomotion (port/vr/vr_motion.h): the stereo camera this tick drew from
+ * and the body under it, for the XR frames to show the body between ticks, ease
+ * the floor's steps and drop the landing dip. Render-side only: nothing here
+ * feeds back into the game.
+ */
+static void gevrStereoPublishMotion(coord3d *pos, coord3d *look, coord3d *up)
+{
+    static u32 teleportEpoch;
+    GevrMotionTick t;
+    Mtxf m;
+    s32 i;
+
+    matrix_4x4_set_lookat(&m, pos->x, pos->y, pos->z, look->x, look->y, look->z, up->x, up->y, up->z);
+    for (i = 0; i < 3; i++)
+    {
+        t.A[0 * 3 + i] = m.m[i][0];   /* right */
+        t.A[1 * 3 + i] = m.m[i][1];   /* up */
+        t.A[2 * 3 + i] = m.m[i][2];   /* back */
+    }
+    t.pos[0] = pos->x;
+    t.pos[1] = pos->y;
+    t.pos[2] = pos->z;
+    t.scale = D_800364CC;
+    t.yaw_deg = s_gevrBaseYaw;
+    t.floor_y = g_CurrentPlayer->field_70;
+    t.stan_y = g_CurrentPlayer->stanHeight;
+    t.vel_y = g_CurrentPlayer->field_7C;
+    {
+        /* the landing dip as it reached the eye: bondviewUpdatePlayerCollisionPositionFields
+         * keeps the eye at least 30 up, which can swallow part of it in a deep duck */
+        const f32 pph = g_playerPerm->player_perspective_height;
+        const f32 duck = gevrStereoHeadHeight();
+        f32 eye = g_CurrentPlayer->eyeheight
+                + (g_CurrentPlayer->field_88 + g_CurrentPlayer->ducking_height_offset) * pph
+                + (duck < 0.0f ? duck : 0.0f);
+        f32 still = eye - g_CurrentPlayer->field_88 * pph;
+
+        if (eye < 30.0f) eye = 30.0f;
+        if (still < 30.0f) still = 30.0f;
+        t.bounce_y = eye - still;
+    }
+    t.head_walk[0] = s_gevrHeadWalkAcc[0];
+    t.head_walk[1] = s_gevrHeadWalkAcc[1];
+    /* the multiplayer menu's view follows the head, not the body: nothing to interpolate */
+    t.cut = s_gevrMotionCut || teleportEpoch != g_gevrTeleportEpoch
+         || (netIsActive() && g_CurrentPlayer->mpmenuon);
+    gevrMotionPublish(&t);
+    s_gevrHeadWalkAcc[0] = s_gevrHeadWalkAcc[1] = 0.0f;
+    s_gevrMotionCut = FALSE;
+    teleportEpoch = g_gevrTeleportEpoch;
+}
+#endif
+
 Gfx *bondviewRenderDebugBondView(Gfx *gdl)
 {
     coord3d cam_pos;
@@ -12652,6 +12727,17 @@ Gfx *bondviewRenderDebugBondView(Gfx *gdl)
     s_gevrEyeWorld = cam_pos;   /* gevrEyePosition: where the frame is seen from */
 #endif
     bondviewUpdateCameraMatrices(&cam_pos, &cam_look, &cam_up);
+#ifdef GEVR
+    if (g_gevrStereo && g_CurrentPlayer->cameramode != 1)
+    {
+        gevrStereoPublishMotion(&cam_pos, &cam_look, &cam_up);
+    }
+    else
+    {
+        s_gevrMotionCut = TRUE;
+        s_gevrHeadWalkAcc[0] = s_gevrHeadWalkAcc[1] = 0.0f;
+    }
+#endif
     sub_GAME_7F068190(&zeropos, &vec);
 
 

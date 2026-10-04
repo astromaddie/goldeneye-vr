@@ -353,6 +353,8 @@ struct ShaderProgram {
     GLint scopeHeadPLocation;
     GLint reprojLocation;      // GoldenEye (issue #53): the in-between frame's redraw
     GLint reprojVPLocation;
+    bool gevrLive;             // its uReproj is on for the eye pass's body move (gevr_eye_live_uniforms)
+    unsigned gevrLiveGen;      // ... with that game frame's matrix
     GLint zTintLocation;       // GoldenEye (issue #72): gevr_zdebug.txt's depth-state tint
 
 };
@@ -552,6 +554,8 @@ static bool s_alphaArgs[2];
 static GLint s_curViewport[4], s_curScissor[4];
 static bool s_eyeRec, s_eyeReady;   // recording the eye pass / a frame to redraw
 static void gevr_eye_keep(GLint first, GLsizei count, bool lineMode);
+static void gevr_eye_live_uniforms(void);
+static std::vector<struct ShaderProgram*> s_liveTouched;   // programs with the live move's uReproj on
 static void gevr_issue_draw(GLint first, GLsizei count, bool decalZ, bool lineMode);
 static void gevr_opaque_depth_after_blend(GLint first, GLsizei count);
 
@@ -1601,6 +1605,7 @@ static void gfx_opengl_clear_shaders(void) {
         glDeleteProgram(pair.second.opengl_program_id);
     }
     shader_program_pool.clear();
+    s_liveTouched.clear();
 
 }
 
@@ -2316,6 +2321,9 @@ static void gfx_opengl_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_
             s_uniTint = shown;
         }
     }
+    if (use_multiview) {
+        gevr_eye_live_uniforms();   // comfort locomotion: the world drawn from the body's shown pose
+    }
     s_uniCacheValid = use_multiview;   /* without multiview the eye uniforms are never cached */
 
     gevr_issue_draw(first, (GLsizei)(3 * buf_vbo_num_tris), s_decalZ && !gevrRoomDl, lineMode);
@@ -2476,6 +2484,77 @@ static float s_eyeProj[16];    // the game's projection (fr.c g_viProjectionMatr
 static float s_eyeHeadP[2];
 static int s_eyeHand = -1;
 
+/*
+ * Comfort locomotion (port/vr/vr_motion.h): the game moves the body once a tick,
+ * and the frames in between showed it standing still, then jumping - walking
+ * judders at 72/90 Hz. Every frame now shows the body where it was at that
+ * frame's display time, between its last two ticks. The redraw carries that
+ * move with the head's (gfx_vr_eye_replay); a game frame's own eye pass takes it
+ * through the same uReproj branch of the vertex shader: back to the camera
+ * space the game drew in, through the body's move, the projection again. Only
+ * the world's draws - the eye pass's draws as kept for the redraw - and not
+ * what a controller holds (VR_HAND_DRAW: drawn from the hand, in view space)
+ * nor the HUD and crosshair (screen-space markers the shader passes through).
+ */
+static bool s_liveOn;           // this eye pass draws the world through s_liveVP
+static float s_liveVP[16];      // the projection x the body's move
+static unsigned s_liveGen;
+static void gevr_eye_proj_times(const float* delta, float M[16]);
+
+static void gevr_eye_live_end(void)
+{
+    if (!s_liveTouched.empty()) {
+        for (struct ShaderProgram* p : s_liveTouched) {
+            if (p->gevrLive && p->reprojLocation >= 0) {
+                glUseProgram(p->opengl_program_id);
+                glUniform1i(p->reprojLocation, 0);
+            }
+            p->gevrLive = false;
+        }
+        s_liveTouched.clear();
+        if (s_curPrg != NULL) {
+            glUseProgram(s_curPrg->opengl_program_id);
+        } else {
+            glUseProgram(0);
+        }
+    }
+    s_liveOn = false;
+}
+
+// gfx_pc.cpp: after gfx_vr_eye_record(true): the world's move for this eye pass (NULL: none)
+void gfx_vr_eye_live(const float* body)
+{
+    s_liveOn = false;
+    if (body != NULL && s_eyeRec) {
+        gevr_eye_proj_times(body, s_liveVP);
+        s_liveOn = true;
+        s_liveGen++;
+    }
+}
+
+static void gevr_eye_live_uniforms(void)
+{
+    struct ShaderProgram* const p = s_curPrg;
+    if (p == NULL || p->reprojLocation < 0) {
+        return;
+    }
+    const bool want = s_liveOn && s_eyeRec && s_eyeHand < 0 && !gForceFlatShaderForMenu && !gVrFlatPass;
+    if (want) {
+        if (!p->gevrLive || p->gevrLiveGen != s_liveGen) {
+            glUniform1i(p->reprojLocation, 1);
+            if (p->reprojVPLocation >= 0) glUniformMatrix4fv(p->reprojVPLocation, 1, GL_FALSE, s_liveVP);
+            if (p->scopeHeadPLocation >= 0) glUniform2f(p->scopeHeadPLocation, s_eyeHeadP[0], s_eyeHeadP[1]);
+            if (!p->gevrLive) s_liveTouched.push_back(p);
+            p->gevrLive = true;
+            p->gevrLiveGen = s_liveGen;
+        }
+    } else if (p->gevrLive) {
+        glUniform1i(p->reprojLocation, 0);
+        p->gevrLive = false;
+        p->gevrLiveGen = 0;
+    }
+}
+
 // gfx_pc.cpp gfx_run, around the stereo eye pass
 void gfx_vr_eye_record(bool on, const float* proj, bool invert_y)
 {
@@ -2494,6 +2573,7 @@ void gfx_vr_eye_record(bool on, const float* proj, bool invert_y)
     } else {
         s_eyeReady = s_eyeRec && !s_eyeDraws.empty();
         s_eyeRec = false;
+        gevr_eye_live_end();
     }
 }
 
@@ -2564,16 +2644,18 @@ static void gevr_eye_proj_times(const float* delta, float M[16])
  * was in the world, a gun lagged the hand every third frame at 90 Hz (user:
  * controller tracking not as smooth).
  */
-void gfx_vr_eye_replay(const float* delta, const float* hand0, const float* hand1)
+void gfx_vr_eye_replay(const float* world, const float* head, const float* hand0, const float* hand1)
 {
     if (!s_eyeReady) {
         return;
     }
 
-    float Ms[3][16];   // [0] the world (the head's move), [1] left, [2] right controller
-    gevr_eye_proj_times(delta, Ms[0]);
-    gevr_eye_proj_times(hand0 != NULL ? hand0 : delta, Ms[1]);
-    gevr_eye_proj_times(hand1 != NULL ? hand1 : delta, Ms[2]);
+    // [0] the world (the head's move and the body's, vr_motion.h), [1] left, [2] right
+    // controller - without one, the head's move alone: it was drawn in view space
+    float Ms[3][16];
+    gevr_eye_proj_times(world, Ms[0]);
+    gevr_eye_proj_times(hand0 != NULL ? hand0 : head, Ms[1]);
+    gevr_eye_proj_times(hand1 != NULL ? hand1 : head, Ms[2]);
 
     // everything this changes, to put back as fast3d left it
     GLint prevVao = 0, depthFunc = GL_LEQUAL;

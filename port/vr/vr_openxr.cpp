@@ -2726,6 +2726,10 @@ extern "C" float gevrVrAspect(void) { return XrAspect; }
 // Game units per metre: scales the eye separation (vr_get_eye_view_offset).
 extern "C" void gevrVrSetWorldScale(float unitsPerMetre) { vr_world_scale = unitsPerMetre; }
 
+// vr_motion.c: the time this XR frame will be shown (the clock comfort locomotion
+// interpolates on, lessons.md row 3), 0 before the first xrWaitFrame.
+extern "C" long long gevrVrDisplayTimeNs(void) { return (long long)g_frameState.predictedDisplayTime; }
+
 // ============================================================================
 // FBOs - Render Targets
 // ============================================================================

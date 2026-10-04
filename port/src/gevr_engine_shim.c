@@ -28,6 +28,7 @@
 #include "video.h"
 #include "gevr_sched.h"
 #include "gevr_rom_segments.h"
+#include "vr_motion.h"  /* comfort locomotion: the display-time tick clock */
 #include <music.h> /* musicFadeTick: the retrace-driven music cross-fade */
 
 /* ---------------------------------------------------------------- video */
@@ -526,6 +527,7 @@ s32 gevrSchedBlockedRecv(OSMesgQueue *mq, OSMesg *msg)
 	{
 		static u64 nextRetraceUs;
 		u64 now;
+		s32 displayDue = -1;
 
 		gevrPumpStage = 4; gevrPumpLoops = 0;
 		for (;;) {
@@ -537,7 +539,18 @@ s32 gevrSchedBlockedRecv(OSMesgQueue *mq, OSMesg *msg)
 				nextRetraceUs = now;
 				break;
 			}
-			if (nextRetraceUs == 0 || now + 2000 >= nextRetraceUs) {
+			/*
+			 * Even movement (port/vr/vr_motion.h): the ticks are laid on the
+			 * display's own timeline, predictedDisplayTime, 60 to the second,
+			 * so each frame knows how far between two ticks it is shown and the
+			 * body is drawn there. Off, or with no frame begun, the wall clock
+			 * decides as before.
+			 */
+			displayDue = gevrMotionTickDue(gevrVrFrameBegun);
+			if (displayDue > 0) {
+				break;
+			}
+			if (displayDue < 0 && (nextRetraceUs == 0 || now + 2000 >= nextRetraceUs)) {
 				break;
 			}
 			if (gevrVrFrameBegun) {
@@ -549,10 +562,11 @@ s32 gevrSchedBlockedRecv(OSMesgQueue *mq, OSMesg *msg)
 			}
 			gevrVrFrameEnd();
 		}
-		if (nextRetraceUs == 0 || now > nextRetraceUs + 100000) {
-			nextRetraceUs = now;
+		if (nextRetraceUs == 0 || now > nextRetraceUs + 100000 || displayDue > 0) {
+			nextRetraceUs = now;   /* on the display clock: kept in step should it hand back */
 		}
 		nextRetraceUs += 16667;
+		gevrMotionTicked();
 
 		{
 			extern u32 gevrRetraceClockFrames;

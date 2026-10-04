@@ -44,6 +44,11 @@ extern int VrMpLoadout[4];      // this player's spawn guns
 extern unsigned VrMpFavStages, VrMpFavSets;
 // GoldenEye comfort vignette strength while moving in stereo, 0 = off .. 1.
 extern float VrComfortVignette;
+// GoldenEye comfort locomotion (vr_motion.h): the body drawn between game ticks with
+// an even walking speed; the view easing small steps; the experimental sway, 0 = off .. 1.
+extern int VrEvenMovement;
+extern int VrSmoothStairs;
+extern float VrSwayStrength;
 // Display refresh rate in Hz, 0 = the runtime's default (vr_openxr.cpp).
 extern int VrRefreshRate;
 

@@ -13,7 +13,88 @@
 #include "model.h"
 
 #ifdef GEVR
+#include "vr_motion.h"
+#include "vr_motion_math.h"
 extern s32 g_gevrStereo;   /* bondview2.c: this frame is drawn in stereo */
+extern bool netIsActive(void);
+extern int netGetLocalSlot(void);
+
+/*
+ * Even movement (port/vr/vr_motion.h): Bond walks by his animation's root
+ * motion, which surges with every step (the 0.93 smoothing in bheadUpdatePos
+ * leaves about a third of it at walking pace). In stereo that pulse is a
+ * forward acceleration the wearer did not make. Here the root motion per
+ * animation frame is measured over whole loops of each move animation (walk
+ * 9.5-27, sprint 7.5-17: g_BondMoveAnimationSetup) and, in stereo, each tick
+ * moves by that mean times the frames it advanced: the same distance over a
+ * loop - so the same average speed and level pacing - without the surge. Until
+ * a whole loop has been seen the animation's own value is used.
+ */
+static GevrGaitLearner s_gevrGait[2];
+static s32 s_gevrGaitAnim = -1;
+static s32 s_gevrGaitSettle;
+
+static f32 gevrEvenGait(f32 disp, f32 frame0, s32 anim)
+{
+    const struct init_bond_anim_unk *a;
+    f32 loop, adv, speed;
+    s32 measure = TRUE;
+
+    if (netIsActive() && get_cur_playernum() != netGetLocalSlot())
+    {
+        return disp;   /* online, another player's copy: neither measured nor changed */
+    }
+    if (anim != 0 && anim != 1)
+    {
+        s_gevrGaitAnim = -1;
+        return disp;
+    }
+    a = &g_BondMoveAnimationSetup[anim];
+    loop = a->endframe - a->loopframe;
+    adv = g_CurrentPlayer->model.animframe1 - frame0;
+    if (adv < 0.0f)
+    {
+        adv += loop;   /* wrapped: modelTickAnim goes on from loopframe */
+    }
+    /* what the animation's speed says it advanced: a frame count far from it (a
+     * wrap at another frame, a jump) is not measured, and the speed's is used */
+    speed = g_CurrentPlayer->model.speed * g_CurrentPlayer->model.playspeed * (f32)g_ClockTimer;
+    if (speed < 0.0f)
+    {
+        speed = -speed;
+    }
+    if (adv > speed * 1.5f + 0.05f || adv < speed * 0.5f - 0.05f)
+    {
+        adv = speed;
+        measure = FALSE;
+    }
+    if (anim != s_gevrGaitAnim)
+    {
+        /* a new animation blends in from the old for its merge: measure after it */
+        s_gevrGaitAnim = anim;
+        s_gevrGaitSettle = 30;
+    }
+    if (s_gevrGaitSettle > 0)
+    {
+        s_gevrGaitSettle -= g_ClockTimer;
+        measure = FALSE;
+    }
+    if (measure)
+    {
+        gevrGaitObserve(&s_gevrGait[anim], disp, adv, loop);
+    }
+    else
+    {
+        /* a measured loop must be whole: start this one again */
+        s_gevrGait[anim].sum_disp = s_gevrGait[anim].sum_frames = 0.0f;
+    }
+    gevrMotionNoteGait(anim, s_gevrGait[anim].ratio, s_gevrGait[anim].loops);
+    if (g_gevrStereo && VrEvenMovement)
+    {
+        return gevrGaitEven(&s_gevrGait[anim], disp, adv);
+    }
+    return disp;
+}
 #endif
 
 
@@ -254,6 +335,9 @@ void bheadUpdate(f32 percent_speed, f32 speedsideways)
     isMergable = modelIsAnimMergingEnabled();
 
     g_CurrentPlayer->resetheadtick = FALSE;
+#ifdef GEVR
+    const f32 gevrFrame0 = g_CurrentPlayer->model.animframe1;   /* the even gait's frame count */
+#endif
 
     modelSetAnimMergingEnabled(0);
     modelTickAnim(&g_CurrentPlayer->model, g_ClockTimer, 1);
@@ -298,6 +382,10 @@ void bheadUpdate(f32 percent_speed, f32 speedsideways)
         }
 #endif
         g_CurrentPlayer->bondheadmatrices[0].m[3][0] += speedsideways;
+#ifdef GEVR
+        g_CurrentPlayer->bondheadmatrices[0].m[3][2] =
+            gevrEvenGait(g_CurrentPlayer->bondheadmatrices[0].m[3][2], gevrFrame0, g_CurrentPlayer->headanim);
+#endif
         g_CurrentPlayer->bondheadmatrices[0].m[3][2] *= percent_speed;
 
         if (g_ClockTimer > 0)

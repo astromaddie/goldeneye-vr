@@ -147,7 +147,10 @@ void gfx_vr_scope_render(void);
 void gfx_vr_eye_record(bool on, const float* proj, bool invert_y);   // gfx_opengl.cpp (issue #53)
 void gfx_vr_eye_hand(int ctrl);
 bool gfx_vr_eye_replay_ready(void);
-void gfx_vr_eye_replay(const float* delta, const float* hand0, const float* hand1);
+void gfx_vr_eye_replay(const float* world, const float* head, const float* hand0, const float* hand1);
+void gfx_vr_eye_live(const float* body);   // gfx_opengl.cpp: the eye pass's body move (vr_motion.h)
+extern "C" int gevrMotionBodyDelta(float out[16]);   // port/vr/vr_motion.c
+extern "C" void gevrMat4Mul(const float a[16], const float b[16], float out[16]);   // vr_motion_math.c
 extern "C" int gevrVrRedrawDelta(float out[16]);   // vr_openxr.cpp
 extern "C" int gevrVrRedrawHandDelta(int hand, float out[16]);
 extern "C" void gevrVrMarkRedrawn(void);
@@ -180,6 +183,14 @@ static float vr_clip_margin_y_w = 0.0f;
 static float vr_cull_eye_dx[2] = { 0.0f, 0.0f };
 static bool vr_cull_stereo = false;
 
+// Comfort locomotion (port/vr/vr_motion.h) draws a game frame's triangles from a
+// camera up to a tick away from the one they were culled for (2 degrees of
+// smooth turn, a sprint's step, a stair). A guard band in clip space, NDC units
+// times w, keeps the trailing edge from losing triangles. Off with the settings.
+extern int VrEvenMovement, VrSmoothStairs;   // vr_settings_defaults.c
+extern float VrSwayStrength;
+static float vr_clip_motion_guard = 0.0f;
+
 static void vr_set_cull_offsets(const float offsets[8]) {
     // Layout per eye, from gfx_opengl_set_eye_offsets: { ipd, asym_x, hud, asym_y }.
     const float exL = offsets[0], eyL = offsets[1], ezL = offsets[2], ewL = offsets[3];
@@ -193,6 +204,7 @@ static void vr_set_cull_offsets(const float offsets[8]) {
     vr_cull_eye_dx[0] = exL;
     vr_cull_eye_dx[1] = exR;
     vr_cull_stereo = (exL != exR);
+    vr_clip_motion_guard = (vr_cull_stereo && (VrEvenMovement || VrSmoothStairs || VrSwayStrength > 0.0f)) ? 0.06f : 0.0f;
 
     // The margins are only as good as the asymmetry the runtime reports, and that
     // differs per headset. Log them once so they can be read back rather than
@@ -2320,8 +2332,8 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
         // costs a few triangles the GPU then clips; being tight drops geometry
         // the headset can see, in a strip down the outer edge of each eye.
         const float aw = fabsf(w);
-        const float mx = vr_clip_margin_x_const + vr_clip_margin_x_w * aw;
-        const float my = vr_clip_margin_y_w * aw;
+        const float mx = vr_clip_margin_x_const + (vr_clip_margin_x_w + vr_clip_motion_guard) * aw;
+        const float my = (vr_clip_margin_y_w + vr_clip_motion_guard) * aw;
 
         d->clip_rej = 0;
         if (x < -w - mx) {
@@ -4631,6 +4643,11 @@ extern "C" void gfx_run(Gfx* commands) {
                 // 3) Render the game directly into the headset texture
                 // (its draws kept for the XR frames before the next game frame: issue #53)
                 gfx_vr_eye_record(true, &g_viProjectionMatrixF[0][0], gfx_rapi->get_clip_parameters().invert_y);
+                {
+                    // comfort locomotion: the body where it is at this frame's display time
+                    float body[16];
+                    gfx_vr_eye_live(gevrMotionBodyDelta(body) ? body : nullptr);
+                }
                 run_display_list();
                 gfx_flush();
                 gfx_vr_eye_record(false, nullptr, false);
@@ -4683,6 +4700,12 @@ extern "C" void gfx_run(Gfx* commands) {
             if (screenRendered) {
                 vr_screen_present(vr_screen_target_tex(), (int)targetW, (int)targetH);
             }
+        } else if (!screenRendered && (VrEvenMovement || VrSmoothStairs || VrSwayStrength > 0.0f)) {
+            // No eye pass for this game frame: the kept draws are the tick before's,
+            // and the body's move is now measured from this one's camera. Nothing
+            // to redraw until the next game frame (comfort locomotion only).
+            gfx_vr_eye_record(true, nullptr, false);
+            gfx_vr_eye_record(false, nullptr, false);
         }
 
         gfx_rapi->end_frame();
@@ -4719,10 +4742,16 @@ extern "C" int gfx_vr_redraw_frame(void) {
     }
     gfx_rapi->start_draw_to_framebuffer(0, 1.0f);
     {
-        float hand[2][16];
+        float hand[2][16], body[16], world[16];
         const bool have0 = gevrVrRedrawHandDelta(0, hand[0]) != 0;
         const bool have1 = gevrVrRedrawHandDelta(1, hand[1]) != 0;
-        gfx_vr_eye_replay(delta, have0 ? hand[0] : nullptr, have1 ? hand[1] : nullptr);
+        // the world: the body's move to this frame's display time (vr_motion.h), then the head's
+        if (gevrMotionBodyDelta(body)) {
+            gevrMat4Mul(delta, body, world);
+        } else {
+            memcpy(world, delta, sizeof(world));
+        }
+        gfx_vr_eye_replay(world, delta, have0 ? hand[0] : nullptr, have1 ? hand[1] : nullptr);
     }
     gfx_opengl_draw_vignette(s_gevrLastVignette);
     vr_end_eye_render();

@@ -106,6 +106,14 @@ extern "C" void vrSettingsSave(void)
     fprintf(f, "; Stereo: darken the edges of the view while moving or smooth-turning, to\n");
     fprintf(f, "; ease motion sickness. 0 = off, up to 1 = strongest.\n");
     fprintf(f, "ComfortVignette=%.2f\n", VrComfortVignette);
+    fprintf(f, "; Stereo walking (launcher: Movement comfort). EvenMovement 1: the body is drawn\n");
+    fprintf(f, "; between the game's 60 Hz steps at the display's rate, walking runs at an even\n");
+    fprintf(f, "; speed and the 3-second run boost is off. SmoothStairs 1: the view eases up and\n");
+    fprintf(f, "; down steps and slopes, with no dip on landing. SwayStrength 0..1: experimental\n");
+    fprintf(f, "; side-to-side sway while walking and a small bob on stairs, 0 = off.\n");
+    fprintf(f, "EvenMovement=%d\n", VrEvenMovement);
+    fprintf(f, "SmoothStairs=%d\n", VrSmoothStairs);
+    fprintf(f, "SwayStrength=%.2f\n", VrSwayStrength);
 
     // --- VR hand placement (no menu UI; edit here) --------------------------------------------
     fprintf(f, "\n");
@@ -293,6 +301,13 @@ extern "C" void vrSettingsLoad(void)
                 if (fval < 0.0f) fval = 0.0f;
                 if (fval > 1.0f) fval = 1.0f;
                 VrComfortVignette = fval;
+            }
+            else if (strcmp(key, "EvenMovement") == 0) VrEvenMovement = fval != 0.0f ? 1 : 0;
+            else if (strcmp(key, "SmoothStairs") == 0) VrSmoothStairs = fval != 0.0f ? 1 : 0;
+            else if (strcmp(key, "SwayStrength") == 0) {
+                if (fval < 0.0f) fval = 0.0f;
+                if (fval > 1.0f) fval = 1.0f;
+                VrSwayStrength = fval;
             }
             else if (strcmp(key, "MotionThrowPitch") == 0) {
                 if (fval < -45.0f) fval = -45.0f;

@@ -64,6 +64,17 @@ int VrPlayMode = 1;
 
 /* GoldenEye: comfort vignette while moving in stereo, 0 = off .. 1. */
 float VrComfortVignette = 0.0f;
+/* GoldenEye comfort locomotion (port/vr/vr_motion.h). The Frame build has the
+ * two fixes on by default; the Quest build keeps its own behaviour unless the
+ * launcher's Movement comfort page turns them on. Sway is an experiment: off. */
+#ifdef GEVR_STEAM_FRAME
+int VrEvenMovement = 1;     /* body drawn between ticks at display time; even speed; no run boost */
+int VrSmoothStairs = 1;     /* the camera eases small steps up and down; no landing dip */
+#else
+int VrEvenMovement = 0;
+int VrSmoothStairs = 0;
+#endif
+float VrSwayStrength = 0.0f;   /* experimental walking sway and stair bob, 0 = off .. 1 */
 int VrRefreshRate = 90;    /* Hz (launcher: 72, 90, 120), 0 = the runtime's default (vr_openxr.cpp vr_request_refresh_rate) */
 
 /* --- Physical setup ------------------------------------------------------ */
