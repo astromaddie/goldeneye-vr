@@ -33,6 +33,9 @@ static void apply(const char *key, const char *val)
     else if (!strcmp(key, "difficulty")) s_diag.difficulty = atoi(val);
     else if (!strcmp(key, "timing") || !strcmp(key, "timing_gpu")) s_diag.timing = parse_bool(val);
     else if (!strcmp(key, "autostart")) s_diag.autostart = parse_bool(val);
+    else if (!strcmp(key, "exit_after_s")) s_diag.exit_after_s = (float)atof(val);
+    else if (!strcmp(key, "one_shot")) s_diag.one_shot = parse_bool(val);
+    else if (!strcmp(key, "refresh_rate")) s_diag.refresh_rate = atoi(val);
     else DIAG_LOG("[vr-diag] unknown key '%s'", key);
 }
 
@@ -62,15 +65,20 @@ static void load(void)
             apply(key, val);
         }
         fclose(f);
+        /* a one-shot run (a Steam launch armed from the Mac) must not leak into the next normal launch */
+        if (s_diag.one_shot && rename("vr-diag.ini", "vr-diag.ini.used") != 0) {
+            DIAG_LOG("[vr-diag] one_shot: could not rename vr-diag.ini");
+        }
     }
     /* the marker file the first bring-up used keeps working */
     if (access("gevr_force_render", F_OK) == 0) {
         s_diag.force_render = 1;
     }
     DIAG_LOG("[vr-diag] vr-diag.ini %s: force_render=%d diag_yaw=%.1f dump_frame=%d dump_stereo_frame=%d "
-             "boot_stage=%d difficulty=%d timing=%d autostart=%d",
+             "boot_stage=%d difficulty=%d timing=%d autostart=%d exit_after_s=%.0f one_shot=%d refresh_rate=%d",
              s_diag.present ? "read" : "absent", s_diag.force_render, s_diag.diag_yaw, s_diag.dump_frame,
-             s_diag.dump_stereo_frame, s_diag.boot_stage, s_diag.difficulty, s_diag.timing, s_diag.autostart);
+             s_diag.dump_stereo_frame, s_diag.boot_stage, s_diag.difficulty, s_diag.timing, s_diag.autostart,
+             s_diag.exit_after_s, s_diag.one_shot, s_diag.refresh_rate);
 }
 
 const GevrDiag *gevrDiag(void)
@@ -79,10 +87,28 @@ const GevrDiag *gevrDiag(void)
     return &s_diag;
 }
 
+void gevrQuitToSteam(void); /* vr_openxr.cpp */
+
+void gevrDiagFrameTick(double nowMs)
+{
+    static double start;
+    static int quit;
+    const GevrDiag *d = gevrDiag();
+
+    if (d->exit_after_s <= 0.0f || quit) return;
+    if (start == 0.0) start = nowMs;
+    if (nowMs - start >= d->exit_after_s * 1000.0) {
+        quit = 1;
+        DIAG_LOG("[vr-diag] exit_after_s=%.0f reached: quitting to Steam", d->exit_after_s);
+        gevrQuitToSteam();
+    }
+}
+
 #else /* not the Steam Frame build: no diagnostics */
 
 static const GevrDiag s_none = { 0, 0.0f, 0, 0, 0, -1, 0, 0, 0 };
 const GevrDiag *gevrDiag(void) { return &s_none; }
+void gevrDiagFrameTick(double nowMs) { (void)nowMs; }
 
 #endif
 

@@ -24,6 +24,9 @@ typedef struct GevrDiag {
     int   timing;              /* [vr-perf] with per-stage CPU times, and the GPU timer query where the driver has one */
     int   autostart;           /* press the launcher's Start without a controller */
     int   present;             /* the file was read (any key may still be absent) */
+    float exit_after_s;        /* quit to Steam this many seconds after the first XR frame (unattended runs), 0 = never */
+    int   one_shot;            /* rename the file to vr-diag.ini.used once read, so the next launch runs normally */
+    int   refresh_rate;        /* request this display rate instead of the ini's VrRefreshRate, 0 = the ini's */
 } GevrDiag;
 
 /* The settings; the file is read on the first call. Never NULL. */
@@ -32,6 +35,9 @@ const GevrDiag *gevrDiag(void);
 /* Convenience for the game files, which see only C and no struct. */
 int gevrDiagBootStage(void);
 int gevrDiagDifficulty(void);
+
+/* Once per XR frame: the exit_after_s timer. */
+void gevrDiagFrameTick(double nowMs);
 
 #ifdef __cplusplus
 }

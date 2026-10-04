@@ -36,6 +36,7 @@
 #ifdef GEVR_STEAM_FRAME
 #  include <unistd.h>
 #  include "vr_frame.h"
+#  include "vr_diag.h"
 #  include "vr_system.h"
 #endif
 
@@ -506,7 +507,12 @@ static void vr_request_refresh_rate(void);
 extern "C" void vr_apply_refresh_rate(void) { vr_request_refresh_rate(); }
 static void vr_request_refresh_rate(void)
 {
-    if (!g_refreshRateSupported || VrRefreshRate <= 0) {
+#ifdef GEVR_STEAM_FRAME
+    const int want = gevrDiag()->refresh_rate > 0 ? gevrDiag()->refresh_rate : VrRefreshRate;
+#else
+    const int want = VrRefreshRate;
+#endif
+    if (!g_refreshRateSupported || want <= 0) {
         return;
     }
     PFN_xrEnumerateDisplayRefreshRatesFB enumRates = nullptr;
@@ -523,13 +529,13 @@ static void vr_request_refresh_rate(void)
     bool have = false;
     for (float r : rates) {
         LOGI("display: %.0f Hz available", r);
-        if (fabsf(r - (float)VrRefreshRate) < 0.5f) have = true;
+        if (fabsf(r - (float)want) < 0.5f) have = true;
     }
     if (have) {
-        XrResult res = request(g_vrState.session, (float)VrRefreshRate);
-        LOGI("display: requested %d Hz (%d)", VrRefreshRate, (int)res);
+        XrResult res = request(g_vrState.session, (float)want);
+        LOGI("display: requested %d Hz (%d)", want, (int)res);
     } else {
-        LOGI("display: %d Hz not offered, keeping the default", VrRefreshRate);
+        LOGI("display: %d Hz not offered, keeping the default", want);
     }
 }
 
@@ -4164,6 +4170,7 @@ extern "C" bool vr_begin_frame_and_update_poses()
     vrFramePerfFrame(vrFrameNowMs() - waitT0, (float)(g_frameState.predictedDisplayPeriod / 1.0e6),
                      (int)g_frameState.shouldRender);
     vrFrameDumpFrameBegin(g_xrFrameCount);
+    gevrDiagFrameTick(vrFrameNowMs());
     if (g_xrFrameCount <= 3 || g_xrFrameCount % 720 == 0) {
         LOGI("[vr-frame] #%llu xrWaitFrame/xrBeginFrame ok, runtime shouldRender=%d%s, rendered so far %llu, predictedDisplayTime=%lld",
              (unsigned long long)g_xrFrameCount, (int)runtimeShouldRender,
