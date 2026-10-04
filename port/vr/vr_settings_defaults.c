@@ -15,6 +15,7 @@
 
 #include <stdbool.h>
 #include <PR/ultratypes.h>
+#include "vr_settings.h"
 
 /* --- Comfort and control options ---------------------------------------- */
 
@@ -83,6 +84,11 @@ int VrWatchStyle = 1;
 #else
 int VrWatchStyle = 0;
 #endif
+/* The eye buffers (standard key resolution_scale; Frame build only): the runtime's recommended
+ * size times VrRenderScale (RENDER_SCALE_MIN..MAX), read as the VR session starts; eye MSAA
+ * samples, 1 = off, 2 or 4, live. Chosen from measurements in Dam at 90 Hz (VR_ARCHITECTURE.md section 11). */
+float VrRenderScale = GEVR_FRAME_RENDER_SCALE;
+int VrMsaa = GEVR_FRAME_MSAA;
 
 /* --- Physical setup ------------------------------------------------------ */
 

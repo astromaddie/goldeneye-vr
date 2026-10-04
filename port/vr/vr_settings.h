@@ -53,6 +53,23 @@ extern float VrSwayStrength;
 extern int VrRefreshRate;
 // The paused watch (Frame build): 1 = the Q-Branch terminal, 0 = the big screen (vr_watch_terminal.h).
 extern int VrWatchStyle;
+// Frame build: the eye buffers' size over the runtime's recommended one (from the next start)
+// and their MSAA samples (1, 2 or 4; live). vrSettingsReadDisplay reads both before the session.
+#define RENDER_SCALE_MIN 0.75f
+#define RENDER_SCALE_MAX 1.5f
+#define GEVR_FRAME_RENDER_SCALE 1.0f   // the defaults, measured: VR_ARCHITECTURE.md section 11
+#define GEVR_FRAME_MSAA 2
+extern float VrRenderScale;
+extern int VrMsaa;
+#ifdef __cplusplus
+extern "C" {
+#endif
+void vrSettingsReadDisplay(void);
+float vrSettingsClampRenderScale(float scale);
+int vrSettingsClampMsaa(int samples);
+#ifdef __cplusplus
+}
+#endif
 
 // Your standing EYE height in cm -- where your eyes are off the floor, roughly
 // 13 cm below the top of your head, not your stature. That is what the headset

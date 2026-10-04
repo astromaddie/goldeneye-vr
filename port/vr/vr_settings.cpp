@@ -118,6 +118,11 @@ extern "C" void vrSettingsSave(void)
     fprintf(f, "; The paused watch (Steam Frame): 1 = the Q-Branch terminal, a sharp panel 0.9 m ahead\n");
     fprintf(f, "; with the watch's pages; 0 = the big screen with the zoomed watch. From the next pause.\n");
     fprintf(f, "WatchStyle=%d\n", VrWatchStyle);
+    fprintf(f, "; Steam Frame: the eye images' resolution over the headset's recommended one,\n");
+    fprintf(f, "; 0.75 to 1.5, from the next start; and their anti-aliasing (MSAA samples:\n");
+    fprintf(f, "; 1 = off, 2 or 4), at once. Both on the VR settings' Graphics page.\n");
+    fprintf(f, "RenderScale=%.2f\n", VrRenderScale);
+    fprintf(f, "EyeMsaa=%d\n", VrMsaa);
 
     // --- VR hand placement (no menu UI; edit here) --------------------------------------------
     fprintf(f, "\n");
@@ -215,6 +220,7 @@ static bool vrSettingsLoadInt(const char *key, int ival)
     else if (strcmp(key, "SmoothStairs") == 0) VrSmoothStairs = ival != 0 ? 1 : 0;
     else if (strcmp(key, "SwayStrength") == 0) VrSwayStrength = ival <= 0 ? 0.0f : 1.0f;
     else if (strcmp(key, "WatchStyle") == 0) VrWatchStyle = ival != 0 ? 1 : 0;
+    else if (strcmp(key, "EyeMsaa") == 0) VrMsaa = vrSettingsClampMsaa(ival);
     /* DisplayHz replaces RefreshRate, whose 120 was only ever the old default
      * (no option set it): the new default, 90, applies to existing installs. */
     else if (strcmp(key, "DisplayHz") == 0) VrRefreshRate = ival < 0 ? 0 : ival;
@@ -272,6 +278,7 @@ static bool vrSettingsLoadFloat(const char *key, float fval, int *gunOffRead, fl
     else if (strcmp(key, "EvenMovement") == 0) VrEvenMovement = fval != 0.0f ? 1 : 0;
     else if (strcmp(key, "SmoothStairs") == 0) VrSmoothStairs = fval != 0.0f ? 1 : 0;
     else if (strcmp(key, "WatchStyle") == 0) VrWatchStyle = fval != 0.0f ? 1 : 0;
+    else if (strcmp(key, "RenderScale") == 0) VrRenderScale = vrSettingsClampRenderScale(fval);
     else if (strcmp(key, "SwayStrength") == 0) {
         if (fval < 0.0f) fval = 0.0f;
         if (fval > 1.0f) fval = 1.0f;
@@ -319,6 +326,36 @@ static bool vrSettingsLoadFloat(const char *key, float fval, int *gunOffRead, fl
     }
     else return false;
     return true;
+}
+
+// RenderScale: 0.75..1.5, else the default (a hand-edited 0 or a typo must not shrink the eyes away).
+extern "C" float vrSettingsClampRenderScale(float scale)
+{
+    if (!(scale > 0.0f)) return 1.0f;
+    if (scale < RENDER_SCALE_MIN) return RENDER_SCALE_MIN;
+    if (scale > RENDER_SCALE_MAX) return RENDER_SCALE_MAX;
+    return scale;
+}
+
+// EyeMsaa: 1, 2 or 4 samples (3 rounds down; above 4 is 4).
+extern "C" int vrSettingsClampMsaa(int samples)
+{
+    return samples >= 4 ? 4 : samples >= 2 ? 2 : 1;
+}
+
+// The eye buffers' two keys alone, for the VR session's start: it sizes the swapchains before the
+// first VR frame, where vrSettingsLoad reads the rest (the same values again).
+extern "C" void vrSettingsReadDisplay(void)
+{
+    FILE *f = fopen(VR_INI_PATH, "r");
+    if (!f) return;
+    char line[128];
+    float fval;
+    while (fgets(line, sizeof(line), f)) {
+        if (sscanf(line, "RenderScale=%f", &fval) == 1) VrRenderScale = vrSettingsClampRenderScale(fval);
+        else if (sscanf(line, "EyeMsaa=%f", &fval) == 1) VrMsaa = vrSettingsClampMsaa((int)fval);
+    }
+    fclose(f);
 }
 
 extern "C" void vrSettingsLoad(void)

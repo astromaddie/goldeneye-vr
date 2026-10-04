@@ -39,6 +39,12 @@
 #  include "vr_diag.h"
 #  include "vr_system.h"
 #  include "vr_watch_terminal.h"
+// goldeneye-vr.ini's eye buffer keys (vr_settings.h, vr_settings_defaults.c)
+extern float VrRenderScale;
+extern int VrMsaa;
+extern "C" void vrSettingsReadDisplay(void);
+extern "C" float vrSettingsClampRenderScale(float scale);
+extern "C" int vrSettingsClampMsaa(int samples);
 #endif
 
 #ifdef ANDROID
@@ -832,6 +838,21 @@ extern "C" bool vr_configure_resolution() {
     // Steam Frame: the runtime's recommended width (1728 on the Frame) times RENDER_SCALE,
     // not the Quest's fixed 1832 (standard.md section 9).
     const uint32_t VR_FIXED_WIDTH = (uint32_t)VrRealRecommendedW;
+    {
+        // RenderScale (goldeneye-vr.ini, the VR settings' Graphics page) as the session starts,
+        // or vr-diag.ini render_scale for one run; later calls (a restart) keep what they were given
+        static bool s_scaleRead = false;
+        if (!s_scaleRead) {
+            s_scaleRead = true;
+            vrSettingsReadDisplay();
+            const float diagScale = gevrDiag()->render_scale;
+            RENDER_SCALE = diagScale > 0.0f ? std::min(2.0f, std::max(0.5f, diagScale)) : VrRenderScale;
+            LOGI("[vr] render scale %.2f (%s), eye MSAA %dx (%s)", RENDER_SCALE,
+                 diagScale > 0.0f ? "vr-diag.ini render_scale" : "goldeneye-vr.ini RenderScale",
+                 gevrDiag()->msaa > 0 ? vrSettingsClampMsaa(gevrDiag()->msaa) : VrMsaa,
+                 gevrDiag()->msaa > 0 ? "vr-diag.ini msaa" : "goldeneye-vr.ini EyeMsaa");
+        }
+    }
     LOGI("[vr] eye width: recommended %d x RENDER_SCALE %.2f (the Quest build's fixed width would be 1832)",
          VrRealRecommendedW, RENDER_SCALE);
 #else
@@ -4795,11 +4816,18 @@ bool vr_begin_eye_render()
 
     glBindFramebuffer(GL_FRAMEBUFFER, g_multiviewFBO);
 
-    if (gfx_msaa_level > 1 && pfnFramebufferTextureMultisampleMultiviewOVR != nullptr) {
-#ifdef ANDROID
-        GLsizei safe_msaa = (gfx_msaa_level > 4) ? 4 : gfx_msaa_level; // limit to 4x
+#ifdef GEVR_STEAM_FRAME
+    // goldeneye-vr.ini EyeMsaa (live), or vr-diag.ini msaa for one run: the eye pass only. The game's
+    // own Video.MSAA (gfx_msaa_level) would also put the screen pass through an MSAA framebuffer.
+    const uint32_t eyeMsaa = (uint32_t)(gevrDiag()->msaa > 0 ? vrSettingsClampMsaa(gevrDiag()->msaa) : vrSettingsClampMsaa(VrMsaa));
 #else
-        GLsizei safe_msaa = gfx_msaa_level; // no limit for PC
+    const uint32_t eyeMsaa = gfx_msaa_level;
+#endif
+    if (eyeMsaa > 1 && pfnFramebufferTextureMultisampleMultiviewOVR != nullptr) {
+#ifdef ANDROID
+        GLsizei safe_msaa = (eyeMsaa > 4) ? 4 : eyeMsaa; // limit to 4x
+#else
+        GLsizei safe_msaa = eyeMsaa; // no limit for PC
 
 #endif
         pfnFramebufferTextureMultisampleMultiviewOVR(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,     swapchainTex,          0, safe_msaa, 0, 2);
@@ -4814,6 +4842,11 @@ bool vr_begin_eye_render()
         // The first frames only: is the two-layer multiview target complete on this GL stack
         // (Zink on Turnip)? Anything but 0x8cd5 means the stereo path draws nothing.
         static int sFboChecks = 0;
+        static uint32_t sFboMsaa = 0;
+        if (sFboMsaa != eyeMsaa) {   // and again after the Graphics page changes the samples
+            sFboMsaa = eyeMsaa;
+            sFboChecks = 0;
+        }
         if (sFboChecks < 3) {
             sFboChecks++;
             const GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
@@ -4821,7 +4854,7 @@ bool vr_begin_eye_render()
             LOGI("multiview FBO %s (status=0x%x, glError=0x%x, tex=%u, %dx%d, 2 layers, msaa=%d)",
                  st == GL_FRAMEBUFFER_COMPLETE ? "COMPLETE" : "INCOMPLETE", (unsigned)st, (unsigned)err,
                  (unsigned)swapchainTex, (int)g_internalRenderWidth, (int)g_internalRenderHeight,
-                 (int)gfx_msaa_level);
+                 (int)eyeMsaa);
         }
     }
 #endif

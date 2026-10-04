@@ -65,6 +65,8 @@ static bool near(float a, float b, float eps = 0.006f) { return std::fabs(a - b)
 struct Values {
     int curved, steady, hz, even, stairs, motionThrow, lefty, swap, stats, nolean, gunSize, unlock, watch;
     float fov, dist, snap, vignette, sway, throwStrength, throwPitch, gaze;
+    float renderScale;
+    int msaa;
     unsigned long long cheats;
     float gunOff[3], grip[2][6];
     int hapticI, hapticMs;
@@ -82,6 +84,8 @@ static void put(const Values &v)
     VrEvenMovement = v.even;
     VrSmoothStairs = v.stairs;
     VrWatchStyle = v.watch;
+    VrRenderScale = v.renderScale;
+    VrMsaa = v.msaa;
     VrSwayStrength = v.sway;
     VrMotionThrowing = v.motionThrow != 0;
     VrMotionThrowStrength = v.throwStrength;
@@ -118,6 +122,8 @@ static void expect(const Values &v, const char *when)
     EXPECT(VrEvenMovement == v.even, "EvenMovement");
     EXPECT(VrSmoothStairs == v.stairs, "SmoothStairs");
     EXPECT(VrWatchStyle == v.watch, "WatchStyle");
+    EXPECT(near(VrRenderScale, v.renderScale), "RenderScale");
+    EXPECT(VrMsaa == v.msaa, "EyeMsaa");
     EXPECT(near(VrSwayStrength, v.sway), "SwayStrength");
     EXPECT((VrMotionThrowing ? 1 : 0) == v.motionThrow, "MotionThrowing");
     EXPECT(near(VrMotionThrowStrength, v.throwStrength), "MotionThrowStrength");
@@ -161,16 +167,19 @@ int main()
     }
     vrSettingsLoad();   // no file yet: the defaults are the settings, and saving is allowed
     CHECK(VrWatchStyle == 1, "WatchStyle: the Frame's default is the Q-Branch terminal");
+    CHECK(near(VrRenderScale, GEVR_FRAME_RENDER_SCALE) && VrMsaa == GEVR_FRAME_MSAA, "RenderScale, EyeMsaa: the Frame's defaults");
 
     // Two full sets of values, every one different from the other and from the defaults, at the
     // precision the file keeps. Smooth turning and a vignette/sway of 0 are covered by set B.
     const Values a = { 1, 1, 120, 0, 0, 0, 1, 1, 1, 1, 2, 1, 0,
                        85.0f, 3.25f, 45.0f, 0.70f, 0.35f, 1.75f, -12.5f, 0.85f,
+                       1.25f, 4,
                        0x0000000180004004ULL,
                        { 1.25f, -0.5f, -10.75f }, { { 1, 2, 3, 4.5f, 5.5f, 6.5f }, { -1, -2, -3, -4.5f, 0, 90 } },
                        7, 120 };
     const Values b = { 0, 0, 72, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1,
                        40.0f, 1.5f, 0.0f, 0.0f, 0.0f, 0.5f, 20.0f, 0.0f,
+                       0.75f, 2,
                        0ULL,
                        { 3.0f, 2.0f, -14.0f }, { { 0, 0, 0, 0, 0, 0 }, { 0.5f, 0.5f, 0.5f, 10, 20, 30 } },
                        2, 40 };
@@ -210,6 +219,35 @@ int main()
     CHECK(VrScreenCurved == 1, "ScreenCurved=1.0");
     CHECK(VrWatchStyle == 0, "WatchStyle=0.0");
     CHECK(near(VrGunOffX, 2.0f) && near(VrGunOffY, 1.0f) && near(VrGunOffZ, -11.0f), "GunOffX/Y/Z as integers");
+
+    // RenderScale and EyeMsaa: hand-written spellings, out-of-range values clamped, and the early
+    // reader the VR session uses before the first frame (vrSettingsReadDisplay) agreeing.
+    writeIni("[VR]\nRenderScale=1\nEyeMsaa=4.0\n");
+    vrSettingsLoad();
+    CHECK(near(VrRenderScale, 1.0f) && VrMsaa == 4, "RenderScale=1, EyeMsaa=4.0");
+    writeIni("[VR]\nRenderScale=3.5\nEyeMsaa=8\n");
+    vrSettingsLoad();
+    CHECK(near(VrRenderScale, RENDER_SCALE_MAX) && VrMsaa == 4, "RenderScale=3.5 -> 1.5, EyeEyeMsaa=8 -> 4");
+    writeIni("[VR]\nRenderScale=0.2\nEyeMsaa=3\n");
+    vrSettingsLoad();
+    CHECK(near(VrRenderScale, RENDER_SCALE_MIN) && VrMsaa == 2, "RenderScale=0.2 -> 0.75, EyeMsaa=3 -> 2");
+    writeIni("[VR]\nRenderScale=0\nEyeMsaa=0\n");
+    vrSettingsLoad();
+    CHECK(near(VrRenderScale, 1.0f) && VrMsaa == 1, "RenderScale=0 -> 1.0, EyeMsaa=0 -> 1");
+    // "Msaa", the key's name in a test build of 2026-10-04 that saved 1 into the player's file,
+    // is not read: the default stands.
+    VrMsaa = GEVR_FRAME_MSAA;
+    writeIni("[VR]\nMsaa=1\n");
+    vrSettingsLoad();
+    vrSettingsReadDisplay();
+    CHECK(VrMsaa == GEVR_FRAME_MSAA, "a stale Msaa=1 is ignored");
+    VrRenderScale = 1.25f;
+    VrMsaa = 2;
+    vrSettingsSave();
+    VrRenderScale = 1.0f;
+    VrMsaa = 1;
+    vrSettingsReadDisplay();
+    CHECK(near(VrRenderScale, 1.25f) && VrMsaa == 2, "vrSettingsReadDisplay reads what vrSettingsSave wrote");
 
     // Text stays text, and unknown keys are ignored.
     writeIni("[VR]\nActiveTexturePack=2024\nNoSuchKey=3\nNoSuchFloat=1.5\n");

@@ -2153,6 +2153,77 @@ static void gevrMovementPage(bool &open, const ImVec4 &gold)
     }
 }
 
+#ifdef GEVR_STEAM_FRAME
+extern float RENDER_SCALE;                          // vr_openxr.cpp: this session's eye scale
+extern "C" int vr_get_internal_render_width(void);
+extern "C" int vr_get_internal_render_height(void);
+
+// Graphics (Steam Frame): the eye images' resolution (RenderScale, from the next start) and their
+// anti-aliasing (EyeMsaa, at once). Measured in Dam at 90 Hz: VR_ARCHITECTURE.md section 11.
+static void gevrGraphicsPage(bool &open, const ImVec4 &gold)
+{
+    ImGui::TextColored(gold, "GRAPHICS");
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("Sharper costs the headset more work. If the view stutters, step back down.");
+    ImGui::PopStyleColor();
+    ImGui::Spacing();
+
+    ImGui::TextColored(gold, "RESOLUTION");
+    {
+        static const float kScales[] = { 0.75f, 1.0f, 1.25f, 1.5f };
+        static const char *kLabels[] = { "75%", "100%", "125%", "150%" };
+        int pick = 1;
+        for (int i = 0; i < 4; i++) {
+            if (std::fabs(VrRenderScale - kScales[i]) < 0.01f) pick = i;
+        }
+        for (int i = 0; i < 4; i++) {
+            if (i) ImGui::SameLine();
+            char id[24];
+            snprintf(id, sizeof(id), "%s##scale", kLabels[i]);
+            if (ImGui::RadioButton(id, &pick, i)) {
+                VrRenderScale = kScales[pick];
+                vr_log("VR settings: RenderScale %.2f (from the next start)", VrRenderScale);
+            }
+        }
+        const int w = vr_get_internal_render_width(), h = vr_get_internal_render_height();
+        if (std::fabs(VrRenderScale - RENDER_SCALE) < 0.01f) {
+            ImGui::TextDisabled("Now %d x %d an eye.", w, h);
+        } else {
+            ImGui::TextDisabled("Now %d x %d an eye (%.0f%%); %.0f%% from the next start.", w, h,
+                                RENDER_SCALE * 100.0f, VrRenderScale * 100.0f);
+        }
+    }
+    ImGui::Spacing();
+    ImGui::TextColored(gold, "SMOOTH EDGES (MSAA)");
+    {
+        int msaa = VrMsaa >= 4 ? 4 : VrMsaa >= 2 ? 2 : 1;
+        bool picked = ImGui::RadioButton("Off##msaa", &msaa, 1);
+        ImGui::SameLine();
+        picked |= ImGui::RadioButton("2x##msaa", &msaa, 2);
+        ImGui::SameLine();
+        picked |= ImGui::RadioButton("4x##msaa", &msaa, 4);
+        if (picked && msaa != VrMsaa) {
+            VrMsaa = msaa;
+            vr_log("VR settings: EyeMsaa %d", VrMsaa);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Smooths the jagged edges of walls and props. At once.");
+        }
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    if (ImGui::Button("Reset to Defaults##graphics")) {
+        VrRenderScale = GEVR_FRAME_RENDER_SCALE;
+        VrMsaa = GEVR_FRAME_MSAA;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Done##graphics", ImVec2(-1, 0))) {
+        open = false;
+    }
+}
+#endif
+
 static void gevrThrowingPage(bool &open, const ImVec4 &gold)
 {
     ImGui::TextColored(gold, "MOTION THROWING SETTINGS");
@@ -2342,8 +2413,10 @@ static void gevrComfortApply(const GevrComfortChoice &c)
 // The main page's two columns of options. `mode` is the launcher's stereo/flat choice (nullptr in
 // game: shown, not changeable); `upd` the updater's state (nullptr: no "Offer test builds").
 static void gevrSettingsColumns(bool inGame, int *mode, GevrComfortChoice &comfort, bool &movementPage,
-                                bool &throwingPage, bool &modsPage, UpdateStatus *upd, const ImVec4 &gold)
+                                bool &throwingPage, bool &modsPage, bool &graphicsPage, UpdateStatus *upd,
+                                const ImVec4 &gold)
 {
+    (void)graphicsPage;   // the Quest build has no Graphics page
     if (ImGui::BeginTable("opts", 2, ImGuiTableFlags_SizingStretchSame)) {
         ImGui::TableNextColumn();
         ImGui::TextColored(gold, "DISPLAY");
@@ -2416,6 +2489,16 @@ static void gevrSettingsColumns(bool inGame, int *mode, GevrComfortChoice &comfo
         }
         ImGui::Spacing();
         ImGui::TextColored(gold, "DISPLAY RATE");
+#ifdef GEVR_STEAM_FRAME
+        // the Graphics page, on the heading's line as Movement... is: the page has no line to spare
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Graphics...")) {
+            graphicsPage = true;
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Resolution and smooth edges (MSAA)");
+        }
+#endif
         {
             // 90 Hz by default; 120 shows each 60 Hz game frame exactly
             // twice (smoothest hands) but works the headset hardest.
@@ -2850,6 +2933,7 @@ extern "C" void gevrLauncherRun(void)
         static bool hapticsPage = false;
         static bool throwingPage = false;
         static bool movementPage = false;
+        static bool graphicsPage = false;
         if (reportPage) {
             gevrReportPage(reportPage, reportCrash, gold, good, bad);
         } else if (hapticsPage) {
@@ -2860,13 +2944,17 @@ extern "C" void gevrLauncherRun(void)
             gevrModsPage(modsPage, now, gold, good, bad);
         } else if (movementPage) {
             gevrMovementPage(movementPage, gold);
+#ifdef GEVR_STEAM_FRAME
+        } else if (graphicsPage) {
+            gevrGraphicsPage(graphicsPage, gold);
+#endif
         } else if (throwingPage) {
             gevrThrowingPage(throwingPage, gold);
         } else if (cheatPage) {
             gevrCheatPage(cheatPage, gold);
         } else {
         // options, two columns
-        gevrSettingsColumns(false, &mode, comfort, movementPage, throwingPage, modsPage, &upd, gold);
+        gevrSettingsColumns(false, &mode, comfort, movementPage, throwingPage, modsPage, graphicsPage, &upd, gold);
         ImGui::Separator();
         // Update line: only when there is something to say, so an
         // up-to-date launcher looks as it always has.
@@ -3036,6 +3124,7 @@ static bool s_ovBackWas = true, s_ovMenuWas = true;
 static bool s_ovFocus = false;
 static std::string s_ovNotice;
 static bool s_ovHaptics = false, s_ovMovement = false, s_ovThrowing = false, s_ovCheats = false, s_ovMods = false;
+static bool s_ovGraphics = false;
 static GevrComfortChoice s_ovComfort;
 static Uint32 s_ovLast = 0;
 static Injected s_ovInj;
@@ -3060,7 +3149,7 @@ extern "C" int gevrVrSettingsOpen(const char *why)
     s_ovSwallow = true;
     s_ovBackWas = s_ovMenuWas = true;
     s_ovFocus = true;
-    s_ovHaptics = s_ovMovement = s_ovThrowing = s_ovCheats = s_ovMods = false;
+    s_ovHaptics = s_ovMovement = s_ovThrowing = s_ovCheats = s_ovMods = s_ovGraphics = false;
     s_ovComfort = gevrComfortRead();
     s_ovLast = SDL_GetTicks();
     s_ovInj = Injected();
@@ -3218,14 +3307,16 @@ extern "C" int gevrVrSettingsOverlayDraw(unsigned *texOut, int *wOut, int *hOut)
             ImGui::SetKeyboardFocusHere(-1);
             s_ovFocus = false;
         }
-    } else if (s_ovHaptics || s_ovMovement || s_ovThrowing || s_ovCheats) {
+    } else if (s_ovHaptics || s_ovMovement || s_ovThrowing || s_ovCheats || s_ovGraphics) {
         // a page: back (or Menu) closes it, as its own Done / Back button does
         if (backPressed || menuPressed) {
-            s_ovHaptics = s_ovMovement = s_ovThrowing = s_ovCheats = false;
+            s_ovHaptics = s_ovMovement = s_ovThrowing = s_ovCheats = s_ovGraphics = false;
         } else if (s_ovHaptics) {
             gevrHapticsPage(s_ovHaptics, gold, good, bad);
         } else if (s_ovMovement) {
             gevrMovementPage(s_ovMovement, gold);
+        } else if (s_ovGraphics) {
+            gevrGraphicsPage(s_ovGraphics, gold);
         } else if (s_ovThrowing) {
             gevrThrowingPage(s_ovThrowing, gold);
         } else {
@@ -3234,7 +3325,7 @@ extern "C" int gevrVrSettingsOverlayDraw(unsigned *texOut, int *wOut, int *hOut)
     } else {
         // Stereo or flat: live, as the right stick click's hold switches it in game (input.c)
         int mode = VrPlayMode ? 1 : 0;
-        gevrSettingsColumns(true, &mode, s_ovComfort, s_ovMovement, s_ovThrowing, s_ovMods, nullptr, gold);
+        gevrSettingsColumns(true, &mode, s_ovComfort, s_ovMovement, s_ovThrowing, s_ovMods, s_ovGraphics, nullptr, gold);
         VrPlayMode = mode ? VR_PLAYMODE_STEREO : VR_PLAYMODE_SCREEN;
         gevrComfortApply(s_ovComfort);   // live: the game reads them every frame
         ImGui::Separator();
