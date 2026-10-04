@@ -252,6 +252,11 @@ extern "C" void vrSettingsLoad(void)
             else if (strncmp(key, "MpCustom", 8) == 0 && key[8] >= '1' && key[8] <= '4') VrMpCustom[key[8] - '1'] = ival;
             else if (strncmp(key, "MpLoadout", 9) == 0 && key[9] >= '1' && key[9] <= '4') VrMpLoadout[key[9] - '1'] = ival;
             else if (strcmp(key, "ScreenCurved") == 0) VrScreenCurved = ival != 0;
+            /* written as integers ("EvenMovement=0"), so they must be read here: the float
+             * branch below never sees a value without a decimal point */
+            else if (strcmp(key, "EvenMovement") == 0) VrEvenMovement = ival != 0 ? 1 : 0;
+            else if (strcmp(key, "SmoothStairs") == 0) VrSmoothStairs = ival != 0 ? 1 : 0;
+            else if (strcmp(key, "SwayStrength") == 0) VrSwayStrength = ival <= 0 ? 0.0f : 1.0f;
             /* DisplayHz replaces RefreshRate, whose 120 was only ever the old default
              * (no option set it): the new default, 90, applies to existing installs. */
             else if (strcmp(key, "DisplayHz") == 0) VrRefreshRate = ival < 0 ? 0 : ival;
