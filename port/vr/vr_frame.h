@@ -41,6 +41,20 @@ void vrFrameDumpState(const float headPos[3], const float headQuat[4], const flo
 /* Write the state log and report; called after the images. */
 void vrFrameDumpFinish(void);
 
+/* ---- dump_scope: the sniper scope's image (vr_diag.h) ------------------------- */
+/* gfx_opengl.cpp, once per scope pass: true on the pass that is to be dumped. */
+int  vrFrameScopeDumpDue(void);
+/* Write vr-dumps/vr-scope.bmp from layer `layer` of array texture `tex` (-1: a plain 2D texture),
+ * and vr-scope.txt starting with `state`; the lens of `hand` is dumped next (vrFrameScopeDumpLens). */
+void vrFrameScopeDumpTarget(int hand, unsigned tex, int layer, int w, int h, const char *state);
+/* vr_openxr.cpp: whether this hand's lens copy is to be dumped now. */
+int  vrFrameScopeLensDue(int hand);
+/* Write vr-dumps/vr-scope-lens.bmp from the framebuffer bound to GL_DRAW_FRAMEBUFFER's texture
+ * `image` (the lens's swapchain image, just written), and add `state` to vr-scope.txt. */
+void vrFrameScopeDumpLens(int hand, unsigned image, int w, int h, const char *state);
+/* A line for vr-scope.txt and the log (the lens layer as submitted), only right after the lens dump. */
+void vrFrameScopeNote(int hand, const char *line);
+
 /* ---- [vr-perf] -------------------------------------------------------------- */
 enum { VRPERF_RENDER = 0, VRPERF_REDRAW = 1, VRPERF_END = 2 };
 /* xrWaitFrame returned: `waitMs` is how long it blocked, `periodMs` the runtime's display period. */

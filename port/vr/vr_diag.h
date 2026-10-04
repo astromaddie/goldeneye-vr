@@ -31,6 +31,8 @@ typedef struct GevrDiag {
     float diag_turn;           /* in stereo play a constant smooth turn, -100..100 % of the stick (snap turn off) */
     int   dump_watch_frame;    /* dump the eyes and the screen this many XR frames after the paused watch's screen is placed, 0 = off */
     int   watch_backdrop;      /* the paused world behind the watch's screen: 0 = default (on), 1 = on, -1 = off (black, as before) */
+    int   dump_scope;          /* on the Nth game frame that draws a scope: vr-dumps/vr-scope.bmp (its target), vr-scope-lens.bmp
+                                  (the lens image the compositor gets) and vr-scope.txt (GL state), 0 = off */
 } GevrDiag;
 
 /* The settings; the file is read on the first call. Never NULL. */
