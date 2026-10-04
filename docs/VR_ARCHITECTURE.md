@@ -586,7 +586,7 @@ reticle; the 3D cinema was not on it).
 | Moonraker laser and KF7/AR33 lenses | not started on the device (same code path as the sniper's) |
 | Menu laser pointer from the aim pose | played in headset (the VR settings were used on the second wear; the fourth wear: often behind the panel) |
 | The pointer on its own layer, last (always on top) | verified unattended 2026-10-05 (`diag_point`, the VR settings docked by the terminal: `vr-comp1.bmp` beam and dot over the dock; layers eyes, terminal, dock, pointer); not worn |
-| Crosshair, billboard sprites and HUD quads keep world up (fourth wear: the reticle rolled with the head) | not started on the device (host-tested: `test_vr_upright.c`) |
+| Crosshair, billboard sprites and HUD quads keep world up (fourth wear: the reticle rolled with the head) | verified unattended 2026-10-05 (final build 3c7aa52, Dam, `diag_roll` 0 and 20 with a `boom` 4 m ahead: `[vr-diag] billboard: camera right.y -0.342, sprite right.y 0.000, sprite up.y 1.000`; in the composited dumps the world tilts with the head while the explosion sprite and the crosshair text stay world-upright; no GL errors). Not worn |
 | Eye `RenderScale` and `EyeMsaa` | verified unattended 2026-10-04 (section 11: timings, the defaults read from `goldeneye-vr.ini`, MSAA edges in the dumps); not worn |
 | The Graphics page itself, and changing `EyeMsaa` live | not started on the device (the page was not dumped; host-tested save and load) |
 | `force_render` synthetic head, stereo eye dumps in Dam | verified unattended at yaw 0 only (yaw 90 and 180 never run) |
