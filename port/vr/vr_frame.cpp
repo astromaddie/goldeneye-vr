@@ -124,6 +124,119 @@ static bool dump_read_framebuffer(const char *name, int w, int h, unsigned *opaq
     return write_bmp24(path, px.data(), w, h, opaquePct);
 }
 
+/* ------------------------------------------------------------ dump_scope */
+
+static unsigned s_scopeFrames;
+static int s_scopeDumpStage;     /* 0 waiting, 1 target written (lens next), 2 lens written, 3 noted: done */
+static int s_scopeDumpHand = -1;
+
+/* Reads colour attachment 0 of a texture (one layer of an array, or a 2D texture) and writes it;
+ * `litPct` is the share of pixels brighter than black (any channel above 8). */
+static bool dump_texture(const char *name, unsigned tex, int layer, int w, int h, unsigned *litPct, GLenum *errOut)
+{
+    static GLuint fbo = 0;
+    GLint prevRead = 0, prevAlign = 4;
+    std::vector<uint8_t> px((size_t)w * h * 4);
+    if (!fbo) glGenFramebuffers(1, &fbo);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevRead);
+    glGetIntegerv(GL_PACK_ALIGNMENT, &prevAlign);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+    if (layer >= 0) {
+        glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, tex, 0, layer);
+    } else {
+        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    }
+    const GLenum st = glCheckFramebufferStatus(GL_READ_FRAMEBUFFER);
+    GLenum err = GL_NO_ERROR;
+    if (st == GL_FRAMEBUFFER_COMPLETE) {
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadBuffer(GL_COLOR_ATTACHMENT0);
+        for (int n = 0; n < 16 && glGetError() != GL_NO_ERROR; n++) {}
+        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+        err = glGetError();
+        glPixelStorei(GL_PACK_ALIGNMENT, prevAlign);
+    }
+    if (layer >= 0) {
+        glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, 0, 0, 0);
+    } else {
+        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+    }
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)prevRead);
+    if (errOut) *errOut = st != GL_FRAMEBUFFER_COMPLETE ? st : err;
+    if (st != GL_FRAMEBUFFER_COMPLETE || err != GL_NO_ERROR) {
+        FLOG("[vr-dump] %s: read framebuffer 0x%x, glReadPixels 0x%x", name, st, err);
+        return false;
+    }
+    unsigned long lit = 0;
+    for (size_t i = 0; i < px.size(); i += 4) {
+        if (px[i] > 8 || px[i + 1] > 8 || px[i + 2] > 8) lit++;
+    }
+    if (litPct) *litPct = (unsigned)(lit * 100ull / ((unsigned long)w * (unsigned long)h));
+    mkdir(kDumpDir, 0777);
+    char path[128];
+    snprintf(path, sizeof(path), "%s/%s", kDumpDir, name);
+    return write_bmp24(path, px.data(), w, h, nullptr);
+}
+
+static void scope_txt(const char *mode, const char *line)
+{
+    char path[128];
+    mkdir(kDumpDir, 0777);
+    snprintf(path, sizeof(path), "%s/vr-scope.txt", kDumpDir);
+    FILE *f = fopen(path, mode);
+    if (f) {
+        fprintf(f, "%s\n", line);
+        fclose(f);
+    }
+    FLOG("[vr-dump] scope: %s", line);
+}
+
+extern "C" int vrFrameScopeDumpDue(void)
+{
+    const GevrDiag *d = gevrDiag();
+    if (d->dump_scope <= 0 || s_scopeDumpStage != 0) return 0;
+    return ++s_scopeFrames >= (unsigned)d->dump_scope ? 1 : 0;
+}
+
+extern "C" void vrFrameScopeDumpTarget(int hand, unsigned tex, int layer, int w, int h, const char *state)
+{
+    unsigned lit = 0;
+    GLenum err = GL_NO_ERROR;
+    const bool ok = dump_texture("vr-scope.bmp", tex, layer, w, h, &lit, &err);
+    char line[1024];
+    snprintf(line, sizeof(line), "%s\ntarget_dump=%s read_error=0x%x lit_pct=%u (scope pass %u)", state,
+             ok ? "vr-scope.bmp" : "failed", err, lit, s_scopeFrames);
+    scope_txt("w", line);
+    s_scopeDumpStage = 1;
+    s_scopeDumpHand = hand;
+}
+
+extern "C" int vrFrameScopeLensDue(int hand)
+{
+    return s_scopeDumpStage == 1 && hand == s_scopeDumpHand ? 1 : 0;
+}
+
+extern "C" void vrFrameScopeDumpLens(int hand, unsigned image, int w, int h, const char *state)
+{
+    unsigned lit = 0;
+    GLenum err = GL_NO_ERROR;
+    if (s_scopeDumpStage != 1 || hand != s_scopeDumpHand) return;
+    const bool ok = dump_texture("vr-scope-lens.bmp", image, -1, w, h, &lit, &err);
+    char line[768];
+    snprintf(line, sizeof(line), "%s lens_dump=%s read_error=0x%x lens_lit_pct=%u", state,
+             ok ? "vr-scope-lens.bmp" : "failed", err, lit);
+    scope_txt("a", line);
+    s_scopeDumpStage = 2;
+}
+
+extern "C" void vrFrameScopeNote(int hand, const char *line)
+{
+    if (s_scopeDumpStage != 2 || hand != s_scopeDumpHand) return;
+    scope_txt("a", line);
+    s_scopeDumpStage = 3;
+    FLOG("[vr-dump] scope dump complete: vr-dumps/vr-scope.bmp, vr-scope-lens.bmp, vr-scope.txt");
+}
+
 extern "C" void vrFrameDumpFrameBegin(uint64_t xrFrame)
 {
     const GevrDiag *d = gevrDiag();

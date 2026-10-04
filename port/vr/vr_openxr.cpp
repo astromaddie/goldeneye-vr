@@ -1727,6 +1727,17 @@ static void vr_update_scope_swapchain(int hand, GLuint srcTex)
         if (prevScissor) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
         if (prevDepth)   glEnable(GL_DEPTH_TEST);   else glDisable(GL_DEPTH_TEST);
     }
+#ifdef GEVR_STEAM_FRAME
+    if (vrFrameScopeLensDue(hand)) {
+        // vr-diag.ini dump_scope: the lens image the compositor gets, as just written
+        char st[256];
+        const GLenum err = glGetError();
+        snprintf(st, sizeof(st), "composite: copy ran=%d src_tex=%u (layer 0) swapchain_image=%u index=%u copy_error=0x%x srgb_convert=%d",
+                 s_scopeCopyProg != 0 ? 1 : 0, srcTex, g_scopeSwapchainImages[hand][imageIndex].image, imageIndex, err,
+                 (g_menuSwapchainIsSrgb && !g_srgbWritesRaw) ? 1 : 0);
+        vrFrameScopeDumpLens(hand, g_scopeSwapchainImages[hand][imageIndex].image, GEVR_SCOPE_RES, GEVR_SCOPE_RES, st);
+    }
+#endif
 #else
     {
         static GLuint srcFbo = 0;
@@ -3850,6 +3861,17 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
                 }
             }
             submitScope[hand] = !lensHidden;
+#ifdef GEVR_STEAM_FRAME
+            {
+                // vr-diag.ini dump_scope: the layer as submitted, after the lens image
+                char note[256];
+                snprintf(note, sizeof(note), "layer: submitted=%d pos=(%.3f %.3f %.3f) size=%.3f orient=(%.3f %.3f %.3f %.3f) facing=(%.2f %.2f %.2f) grip=(%.3f %.3f %.3f)",
+                         submitScope[hand] ? 1 : 0, layerQ.pose.position.x, layerQ.pose.position.y, layerQ.pose.position.z,
+                         layerQ.size.width, layerQ.pose.orientation.x, layerQ.pose.orientation.y, layerQ.pose.orientation.z,
+                         layerQ.pose.orientation.w, bx, by, bz, gp[0], gp[1], gp[2]);
+                vrFrameScopeNote(hand, note);
+            }
+#endif
             static unsigned n[2];
             if ((n[hand]++ % 180) == 0) {
                 LOGI("scope: hand %d lens at (%.3f %.3f %.3f) m, facing (%.2f %.2f %.2f)%s", hand,
