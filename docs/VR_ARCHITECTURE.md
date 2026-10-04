@@ -4,7 +4,7 @@ Current state, not a log. Build and deploy steps are in [STEAM_FRAME.md](STEAM_F
 Quest-era history is in [../STATUS.md](../STATUS.md) and `docs/archive/`. The conventions are the
 Steam Frame port standard (`standard.md`, v0.1) and the evidence ladder in `verification.md`.
 
-Worn three times on 2026-10-04 (section 8 has the builds and what each wear covered); everything
+Worn four times on 2026-10-04 (section 8 has the builds and what each wear covered); everything
 else is "verified unattended" (a headset on a desk, force-render, the journal and dumps) or "not
 started".
 
@@ -52,10 +52,17 @@ Frame-only.
   stereo frame from the newest head pose (`gfx_vr_redraw_frame`, issue #53).
 - Stereo gameplay renders both eyes in one pass into the two layers of one swapchain image
   (multiview). Menus, the watch, cutscenes and flat play render into a screen target and are
-  submitted as a world-locked quad layer (`vr_screen.cpp`); the eye buffers then only carry the
-  pointer, except behind the paused watch, where they hold the frozen, dimmed world (section 5,
+  submitted as a world-locked quad layer (`vr_screen.cpp`); the eye buffers are then cleared
+  transparent, except behind the paused watch, where they hold the frozen, dimmed world (section 5,
   "The paused watch"). The paused watch itself is the Q-Branch terminal: its own quad layers (the
   page panel and the docked VR settings), not the virtual screen.
+- **The menu pointer is always on top** (standard section 3; wear 2026-10-04 on 6425527: the beam
+  often showed behind the panel). On the Frame build the beam (from the aim pose to the hit) and its
+  dot are a projection layer of their own (`vr_openxr.cpp` `vr_pointer_layer`): a two-layer
+  swapchain at half the eye size (864 x 864, about 9 MB), cleared transparent, redrawn every XR frame
+  from that frame's eye views and submitted after every other layer, the cinema's fade included. The
+  far end keeps at least about a pixel and a half of that layer's width. Log: `[vr] pointer layer:
+  swapchain ...`, `shown`/`hidden`. The Quest build still draws it into the eye layer.
 - Session states are logged by name. `shouldRender=false` (headset off the head) still ticks the
   game and submits empty frames; `force_render` draws anyway.
 - Quitting is SteamVR's job (standard section 1, the user 2026-10-03): no menu offers it, and the
@@ -79,14 +86,15 @@ verified. "Dump" means the unattended eye dumps of section 8.
 | Sky | `sky.c` -> `G_GEVR_SKY_VTX` pre-projected float vertices, `gfx_sp_sky_vertex` | Clipped by the GPU per eye (`clip_rej = 0`); the sky takes the head's view like the rooms | dump (sky at every yaw) |
 | Desktop aspect hacks | `gfx_update_aspect_mode`, `gfx_adjust_viewport_or_scissor` | Identity in VR: the viewport is the whole eye target, the projection is the runtime's | read |
 | Full-screen fades and damage flash | `gfx_pc.cpp` `gevrStereoViewportFill` | A fill over the letterboxed player viewport is stretched to cover the eye | read |
-| HUD, crosshair, messages | `VR_HUD_CAPTURE_*_H`/`_R` and `VR_WEAPON_PANEL_CAPTURE_*` tags, `gfx_opengl.cpp` `gevr_capture_target_ensure` | The crosshair stays in the eye pass. Health and armour, messages, subtitles, the countdown and prompts are captured (H) onto a head-locked quad layer, the ammo counter (R) onto a panel at the right hand, the weapon panel (P) onto its own. Each capture is a two-layer target attached as two views, the image in layer 0: a one-view target is invalid with the game's `num_views = 2` programs, and Mesa dropped every capture draw (all these quads were empty on the Frame until 2026-10-04) | verified unattended 2026-10-04 (`dump_hud`: `vr-hud-R.bmp` the PP7's counter, `vr-hud-H.bmp` the countdown; `diag_gl`: no GL error in any pass). The weapon panel's capture not dumped; not worn |
+| HUD, crosshair, messages | `VR_HUD_CAPTURE_*_H`/`_R` and `VR_WEAPON_PANEL_CAPTURE_*` tags, `gfx_opengl.cpp` `gevr_capture_target_ensure` | The crosshair stays in the eye pass (row below). Health and armour, messages, subtitles, the countdown and prompts are captured (H) onto a head-locked quad layer, the ammo counter (R) onto a panel at the right hand, the weapon panel (P) onto its own. Each capture is a two-layer target attached as two views, the image in layer 0: a one-view target is invalid with the game's `num_views = 2` programs, and Mesa dropped every capture draw (all these quads were empty on the Frame until 2026-10-04) | verified unattended 2026-10-04 (`dump_hud`: `vr-hud-R.bmp` the PP7's counter, `vr-hud-H.bmp` the countdown; `diag_gl`: no GL error in any pass). The weapon panel's capture not dumped; not worn. Since the fourth wear the three quads face the eyes with world up, not the head's (`uprightFacing` in `vr_submit_frame`, Frame build): not started on the device |
+| Crosshair (the 3D sight) and billboard sprites: no roll | `gunfire.c` `gevrDrawSight3D`, `bondview2.c` `gevrBillboardMtxf` (explosion.c explosion and smoke parts, glass2.c hit sparks), `vr_upright_math.h` | The stereo camera takes the head's roll; anything built on its own x and y rolled with a tilted head (fourth wear). The sight is a quad facing the eye at the aim ray's hit point with world up kept (its place is the aim ray's alone); the sprites use the view-to-world matrix with roll-free right and up rows: they turn about world up and tilt with the view's pitch, never its roll. The scope's copy of the sight is upright with the gun. Both builds | host test (`test_vr_upright.c`); not started on the device (`diag_roll` 0/20 with a `boom` is the check) |
 | First-person gun, arms, casings | `bondview2.c` `gevrStereoGunMatrix`, `VR_CULL_OFF_*` tags | Placed from the grip pose in view space at the game frame's camera; redraw frames carry them with the hand (`gevrVrRedrawHandDelta`) | read; parked-hand dump |
 | World draws between ticks (even movement, smooth stairs) | `gfx_opengl.cpp` `gfx_vr_eye_live`, `gfx_vr_eye_replay` | The world's draws take the body's move to the frame's display time through the `uReproj` branch; hand-tagged draws keep their hand delta, screen-space HUD markers are skipped | host test of the matrix; not yet on the device |
 | Menus; cutscenes with `CutsceneMode=0` | `vr_screen.cpp`, `gevrStereoFrame` `want` | Not stereo: the screen quad, world-locked at 2.5 m | dump (`vr-hud.bmp`) |
-| Cutscenes on the 3D cinema (Frame build, `CutsceneMode=1`): intro flyby, swirl, death replay, mission-end cameras | `bondview2.c` `gevrCinemaFrame`, `vr_cinema.cpp`, the screen pass in `gfx_pc.cpp`, `uVrFlat 2` in `gfx_opengl.cpp` | The game's own camera drawn as two cameras 64 mm apart (world vertices only; the game's 2D stays at the screen plane); the head never drives the camera; a world-locked projection layer (section 4, "Cutscenes") | host test of the maths (`test_vr_cinema.c`); built, not yet run on the device |
+| Cutscenes on the 3D cinema (Frame build, `CutsceneMode=1`): intro flyby, swirl, death replay, mission-end cameras | `bondview2.c` `gevrCinemaFrame`, `vr_cinema.cpp`, the screen pass in `gfx_pc.cpp`, `uVrFlat 2` in `gfx_opengl.cpp` | The game's own camera drawn as two cameras 64 mm apart (world vertices only; the game's 2D stays at the screen plane); the head never drives the camera; a world-locked projection layer (section 4, "Cutscenes") | host test of the maths (`test_vr_cinema.c`); verified unattended 2026-10-05 (Dam's intro: section 4, "Unattended check") |
 | The paused watch (Frame build) | `vr_watch_terminal.cpp`, the page pass in `gfx_pc.cpp`, `gevr_watch_backdrop` | Option C: its page alone, cropped to the watch face and rendered at panel resolution, on a world-locked quad 0.9 m ahead; behind it the last stereo frame replayed from the head's pose (`uReproj` 2: hand-held draws left out, screen-locked HUD dropped), dimmed | host tests of the placement, re-centre, dock, hit and crop; verified unattended 2026-10-04 (`dump_watch_frame` in Dam: the status page sharp on the 1024 x 648 panel, alone on black in its green frame; the frozen world dimmed in stereo behind it; the VR settings docked by the cheat hook, closed with B; START resumes). Not worn |
-| Sniper scope lens (and the laser's, the KF7/AR33 magnifier) | `gfx_opengl.cpp` `gfx_vr_scope_*`, `vr_openxr.cpp` scope layer | The world's draws kept from the eye pass, drawn again through the scope's camera into a 512² two-layer target attached as two views (the image is layer 0; the shader drops view 1), copied round into a quad layer on the gun, the size of the circle inside the eyepiece's face (sniper: GsniperrifleZ node 0x27c, radius 21.7 model units, 3.7 cm; laser: 16; the KF7/AR33 magnifier, which has no lens on the model: 16). The view across it follows the lens's angle, so its size never changes the magnification. A one-view target is invalid with the game's `num_views = 2` programs: Mesa drops every draw (the lens was black on the Frame), Quest's driver let it pass | played in headset 2026-10-04 (the scope works; its lens then twice the eyepiece's size, since fixed). The fixed size verified unattended (`diag_aim` + `dump_scope`: the layer covers the eyepiece's ring in the eye image); the red sight and the laser's and rifles' lenses not checked on the device |
-| Effect billboards and hit sparks | `gunfire.c`, `explosion.c` | Hit spark 4 units off the wall, smoke 16 (the game's 26/100 floated) | read (STATUS.md) |
+| Sniper scope lens (and the laser's, the KF7/AR33 magnifier) | `gfx_opengl.cpp` `gfx_vr_scope_*`, `vr_openxr.cpp` scope layer, `vr_scope_math.h` | The world's draws kept from the eye pass, drawn again through the scope's camera into a 512² two-layer target attached as two views (the image is layer 0; the shader drops view 1). On the Frame (since the fourth wear) the scope is optics: the image is collimated, at infinity on the gun's axis, and shown as a projection layer whose layer for each eye is that eye's window through the eyepiece's circle (sniper: GsniperrifleZ node 0x27c, radius 21.7 model units, 3.7 cm; laser: 16; the KF7/AR33 magnifier, which has no lens on the model: 16) into the one image. The eye looking through it sees the target and the red sight where the gun points at any eye relief; the other eye sees the same image through its own window while the shared field (at most tan 0.4 unless the nearest eye needs more: the 512-texel resolution limit) covers it, past that the dark glass. No near plane: the old quad's turn-and-push-out near the eyes, along the head-centre ray, is what slid the image right (17 degrees at 6 cm). The magnification is the N64's, as before (`imageTan` = the field the image covers). The Quest build keeps the quad. A one-view target is invalid with the game's `num_views = 2` programs: Mesa drops every draw (the lens was black on the Frame), Quest's driver let it pass | played in headset 2026-10-04 (the scope works). The optics verified unattended 2026-10-05 (`diag_aim` 30/15/6 with `diag_aim_eye=1`, aiming, `dump_scope`, composite `vr-comp1.bmp`): the red sight on the right eye's line of sight at all three distances; windows tan 0.061/0.123/0.307 (R / d); the left eye's window all image at 30 cm, about a third at 15, dark glass at 6. Host test `test_vr_scope.c`. Not worn; the laser's and rifles' lenses not checked on the device |
+| Effect billboards and hit sparks | `gunfire.c`, `explosion.c` | Hit spark 4 units off the wall, smoke 16 (the game's 26/100 floated); no roll (the crosshair row above) | read (STATUS.md) |
 | Fog | `bgfog.c`, `GEVR_FAR_EXTEND` | Far edge pushed out with the rooms | read |
 | Water, glass | `sky.c` `WaterConcavity` 0 in stereo | Floats through the pre-projected path; reflections in view space | read (issue #30) |
 
@@ -201,6 +209,12 @@ against two real cameras). The CPU clip and backface tests take the same offsets
 plane in both eyes. Layer 0 is the left eye's picture, layer 1 the right's. The far field parts by
 `W P00 sep / C` on the screen: 42 mm for GoldenEye's 60-degree 4:3 camera, about 9 m away for a
 64 mm IPD; a zoomed camera is held to 0.75 x IPD so the eyes never diverge (logged when it happens).
+Measured on the Frame (2026-10-05, Dam's intro, P00 1.191): the far field parts by 38 mm on the
+screen (`far=38.1mm` in the log; 24 px of the 1920-px picture, block-matched in the dumps), so
+the far hills look about 3 / (1 - 38/64) = 7.4 m away; the dam wall 23 px, the near water 21 px.
+**Cinema depth** (`CinemaDepth`, DISPLAY page under Cutscenes, 50-150 %, default 100, at once)
+scales the 64 mm; the 0.75 x IPD cap still applies, so at this camera anything past about 126 %
+gives the same far field (12 m apparent) and only parts the nearer scenery more.
 The sky's cloud and water polygons carry their real w and get depth; the plain sky fill is 2D.
 
 **The screen and the projection layer.** World-locked, placed at the head's yaw when the cutscene
@@ -209,7 +223,8 @@ starts (the first XR frame with its picture) and again on a recentre: 3.0 m ahea
 black band 0.45 m deep under it. Because SteamVR on the Frame shows per-eye quads to both eyes
 (lesson 45) it is submitted as a projection layer (`gevrCinemaLayer`), rebuilt every XR frame from
 that frame's eye poses: per eye, pose = (the screen's orientation, the eye's position) and fov =
-`atan2` of the screen's corners in the screen's frame, so each eye's image lands on the same
+`atan2` of the screen's corners in the screen's frame (libm's, in double: the game's own `atan2f`,
+0..2 pi, gave 5.83 rad for the left and down angles on the device until 2026-10-05), so each eye's image lands on the same
 rectangle in the room. The swapchain is 2 layers, the picture's width by picture plus band
 (`1920 x 1728` at the default resolution). The transparent eye layer still goes on top, so a
 projection layer is always there behind it (lesson 56); the virtual screen's quad is not submitted.
@@ -237,7 +252,9 @@ every 180 XR frames, then `[vr] cinema 3D: cutscene #1 ends after N game frames 
 two images differing by horizontal parallax (about 27 px for the far hills, none at 3 m in the
 game). `vr-eye0/1.bmp` hold only the cleared eye layer. With `CutsceneMode=0` the same run logs
 `held flat` and shows the old screen (`vr-hud.bmp`). `cinema_sep_mm=N` changes the separation
-without a rebuild.
+without a rebuild. Run on 2026-10-05 (build 36dcfb6 + this session's fixes): every expected line,
+no GL errors in 3300 game frames, the intro 1130 game frames; `vr-comp0/1.bmp` show the picture
+at 3 m, 53 degrees wide, its centre just below the eyes' level.
 
 ## 5. Input
 
@@ -347,10 +364,10 @@ placement math in `vr_screen_math.c` (host-tested in `test_vr_screen.c`), the pa
   after 10 frames (the log says so). The N64 font glyphs are still the game's bitmaps, magnified.
 - **The world behind**: unchanged from option D (below): the last stereo frame frozen as the pages
   came up, drawn every XR frame from the head's pose, dimmed to 40% with the vignette, hands and HUD
-  left out. Layer order: the eye layer (opaque, the paused world) then the panels; with the laser
-  wanted (the docked VR settings) the panels' places are cut out of the eye image and the panels go
-  under it, so the beam draws in front. A projection layer is always submitted; the virtual screen
-  is not submitted while the terminal holds the watch.
+  left out. Layer order: the eye layer (opaque, the paused world), then the panels, then the
+  pointer's own layer (the docked VR settings' laser; the old cut-out of the panels' places from the
+  eye image is gone). A projection layer is always submitted; the virtual screen is not submitted
+  while the terminal holds the watch.
 - **Navigation**: the game's own, unchanged: D-pad or left stick plus A/B, grips turn pages (input.c).
   No laser on the watch's pages: rows are drawn at page-specific places by the game and selected
   through its own cursor state, and mapping a hit to them reliably for every page was not attempted.
@@ -408,10 +425,8 @@ and the zoomed N64 watch image are as before; only where it is shown changed. Wi
   world: frozen replay (dim 0.40, edges 0.20; N draws (M held by the hands left out), K of 3 vertex
   segments copied)`, or `[vr] paused world: none (why)` and the old black surround.
 - **Layer order.** With the paused world in the eye image (`g_eyeBackdrop` 1) the projection layer
-  goes first, opaque, and the watch's screen over it. When something reads the pointer (the VR
-  settings opened from the watch: 2) the screen's surface is cleared to transparent in the eye
-  image (`vr_screen_cut_eyes`) and the usual order is kept (screen, then the eye layer with alpha),
-  so the beam draws in front. A projection layer is always submitted.
+  goes first, opaque, and the watch's screen over it; the pointer's layer goes last, over both.
+  A projection layer is always submitted.
 - **Diagnostics.** `vr-diag.ini` `dump_watch_frame=N` dumps the eyes and the screen from one game
   frame N XR frames after the watch's screen is placed; `watch_backdrop=0` turns the paused world
   off (black behind the watch, as before).
@@ -442,8 +457,7 @@ Settings...** at the bottom of the watch's Game Options page (`options.c`; A on 
   up; the screen is placed in front of you as they open. Opened from the watch they dock as a second
   panel right of the Q-Branch terminal, turned 20 degrees in, with the laser on it (see "The paused
   watch"); with `WatchStyle=0` they show on the watch's own big screen instead (same place and
-  shape, the paused world still behind; the screen's place is cut out of the eye layer so the laser
-  draws in front of it). A front layer 10 cm closer at native resolution, as the option D mockup
+  shape, the paused world still behind; the laser's own layer draws in front of it). A front layer 10 cm closer at native resolution, as the option D mockup
   drew it, was left out: one screen is simpler and already sharp (the settings texture is 1280x960).
 - **Input.** The launcher's own feeders (`feedGamepad`, `feedPointer`): the laser and trigger, the
   sticks or D-pad and A, both grips to move the screen. B, Y, a short View press or Menu close a page,
@@ -484,10 +498,15 @@ Settings...** at the bottom of the watch's Game Options page (`options.c`; A on 
 | `diag_turn` | stereo play turns smoothly at this % of the stick (-100..100), whatever the snap setting |
 | `dump_watch_frame` | the `dump_frame` files N XR frames after the paused watch is placed, eyes and the watch from one game frame: with the terminal `vr-watch.bmp` (its 1024 x 648 panel; `vr-dock.bmp` when the VR settings are docked), with `WatchStyle=0` `vr-hud.bmp` (the big screen) |
 | `watch_backdrop` | `0`: no paused world behind the watch (black, as before); default on |
-| `dump_scope` | on the Nth game frame that draws a scope: `vr-dumps/vr-scope.bmp` (the scope target's layer 0), `vr-scope-lens.bmp` (the round lens image as handed to the compositor) and `vr-scope.txt` (target and status, view count, draws kept and in view, the pass's GL error, the same draw's error into a one-view target, camera sanity, the copy and the layer as submitted). Give the rifle with `gevr_cheat.txt` `hold17`; force_render's parked gun hand is enough. In Dam the game goes back to the PP7 about 0.7 s later, so keep N under about 30 (10 works) |
+| `dump_scope` | on the Nth game frame that draws a scope: `vr-dumps/vr-scope.bmp` (the scope target's layer 0), `vr-scope-lens0.bmp` and `vr-scope-lens1.bmp` (each eye's window into it, the scope's projection layer as handed to the compositor) and `vr-scope.txt` (target and status, view count, draws kept and in view, the pass's GL error, the same draw's error into a one-view target, camera sanity, the copy, each eye's window and the field, the layer as submitted). Give the rifle with `gevr_cheat.txt` `hold17`; force_render's parked gun hand is enough. In Dam the game goes back to the PP7 about 0.7 s later, so keep N under about 30 (10 works) |
 | `diag_gl` | `[vr-gl]`: `glGetError` before and after every game draw and at the end of each pass (screen pass, eye pass, scope, vignette, hub, the layer copies, the in-between redraw), the target named (eye pass, screen pass, capture L/R/H/P); the first error at each place is logged at once with the bound target's view count, then counts every 300 game frames (`no GL errors` when clean). It takes the errors it reads, so `vr-scope.txt`'s `gl_error_before` reads 0 with it on |
 | `dump_hud` | on the Nth XR frame that copies a HUD capture to its quad layer: `vr-dumps/vr-hud-L/R/H/P.bmp`, each capture copied that frame (layer 0 of its target, the swapchain's size) |
-| `diag_aim` | with `force_render`: the gun hand raised so the scope's eyepiece sits this many cm ahead of the left eye on its line of sight (`30` works); `dump_scope` then dumps the eyes in the same frame, the eyepiece as drawn to hold the lens layer (`vr-scope.txt` `layer:`) against |
+| `diag_aim` | with `force_render`: the gun hand raised so the scope's eyepiece sits this many cm ahead of an eye on its line of sight (`30` works); `dump_scope` then dumps the eyes in the same frame, with the composite (`vr-comp0/1.bmp`) showing the lens layer on the eyepiece as drawn |
+| `diag_aim_eye` | `diag_aim`'s eye: `0` left (default), `1` right |
+| `diag_roll` | with `force_render`: the synthetic head's roll in degrees, positive = right ear down. The parked hands hang from the unrolled head, so only the view tilts; the log's `[vr-diag] billboard:` line compares the camera's right axis with the sprites' every 2 s |
+| `diag_point` | with `force_render`: the right hand's aim pose points at whatever panel is up (the virtual screen, or the VR settings docked by the watch terminal), so the laser shows without a controller |
+| `dump_cheat_frame` | the dump files N XR frames after a `gevr_cheat.txt` word is applied (`vrsettings`, which wants the panel too, or `boom`: an explosion 4 m ahead, for the sprites; with `invincible` first) |
+| composite (every dump) | `vr-comp0.bmp`, `vr-comp1.bmp`: every submitted layer read back and composited per eye as the compositor does it (projection layers turned by their poses, quads ray-cast, premultiplied alpha), at half the eye size; the log lists the layers back to front. Cylinders are left out |
 | `render_scale`, `msaa` | this run's eye scale (0.5-2.0) and eye MSAA samples (1, 2, 4) instead of `goldeneye-vr.ini`'s `RenderScale` and `EyeMsaa`, for timing runs that leave the player's file alone |
 | `dump_cinema_frame` | the `dump_frame` files N XR frames after the 3D cinema is placed (a cutscene starts; `boot_stage=33` plays Dam's intro), with `vr-cinema0.bmp` and `vr-cinema1.bmp`: the two eye images as the compositor gets them (picture over the band) |
 | `cinema_sep_mm` | the 3D cinema's camera separation in mm; 0 or absent = 64 |
@@ -529,7 +548,8 @@ and the docs use. Keys not listed have no standard counterpart.
 | `watch_style` | `WatchStyle` | `terminal` = 1 (Frame default: option C, the Q-Branch terminal), `screen` = 0 (option D, the big screen); read as the watch opens; the Quest build ignores it (port-specific) |
 | `cutscenes` | `CutsceneMode` | `cinema_3d` = 1 (Frame default), `flat` = 0 (the virtual screen, as before; this port had no head-tracked cutscene view to call immersive); VR settings, DISPLAY > Cutscenes; read each game frame, so it applies from the next cutscene frame; the Quest build ignores it |
 | `camera_shake` | none | the game's head bob and sway are off in stereo; `SwayStrength` is an opt-in experiment |
-| `force_render`, `diag_yaw`, `dump_frame`, `timing`, `diag_walk`, `diag_turn`, `dump_watch_frame`, `watch_backdrop`, `dump_scope`, `diag_gl`, `dump_hud`, `diag_aim`, `render_scale`, `msaa`, `dump_cinema_frame`, `cinema_sep_mm` | `vr-diag.ini` | not in the game's ini |
+| `cinema_depth` (port-specific) | `CinemaDepth` | the 3D cinema's camera separation, percent of 64 mm, 50-200, default 100; VR settings, DISPLAY > Cinema depth, at once (Frame build) |
+| `force_render`, `diag_yaw`, `diag_roll`, `dump_frame`, `timing`, `diag_walk`, `diag_turn`, `dump_watch_frame`, `watch_backdrop`, `dump_scope`, `diag_gl`, `dump_hud`, `diag_aim`, `diag_aim_eye`, `diag_point`, `dump_cheat_frame`, `render_scale`, `msaa`, `dump_cinema_frame`, `cinema_sep_mm` | `vr-diag.ini` | not in the game's ini |
 
 ## 8. Status
 
@@ -537,7 +557,9 @@ States: **played in headset** (the user wore it), **verified unattended** (the F
 force_render, the journal, dumps), **not started** (nothing on the device yet, even if it is built
 or host-tested). Wear sessions so far, all 2026-10-04: first wear about 14:00 on 641dd62; second at
 about 17:49 on 8c3565a; third in the evening on c3b3464 (or edc6024: the two differ only in the VR
-settings' layout and a diagnostic), "definitely a lot better", no major issues.
+settings' layout and a diagnostic), "definitely a lot better", no major issues; a fourth late in
+the evening on 6425527 (section 10: the pointer behind panels, the scope drifting, the rolling
+reticle; the 3D cinema was not on it).
 
 | Area | State |
 | --- | --- |
@@ -559,15 +581,19 @@ settings' layout and a diagnostic), "definitely a lot better", no major issues.
 | HUD quads: ammo counter, health and armour, messages, countdown, prompts, weapon panel | played in headset (third wear's build: newly visible), no issues reported, not specifically tested; verified unattended (`dump_hud`, `diag_gl`: no GL error in any pass) |
 | Sniper scope lens shows the zoomed world | played in headset (third wear: the scope works; the second wear's build had it black) |
 | Scope lens size: the eyepiece's own size (was twice it) | verified unattended 2026-10-04 (`diag_aim`, `dump_scope`: section 10); not worn |
-| The red sight in the scope | not started on the device (drawn into the scope's own image at its centre, so the lens size cannot move it) |
+| The red sight in the scope | verified unattended 2026-10-05 (aiming in the `diag_aim` runs: at the image's centre, on the aiming eye's line of sight at 30, 15 and 6 cm) |
+| Scope as optics: a collimated image on the gun's axis, per-eye windows (fourth wear: it drifted right near the eye) | verified unattended 2026-10-05 (section 3); not worn |
 | Moonraker laser and KF7/AR33 lenses | not started on the device (same code path as the sniper's) |
-| Menu laser pointer from the aim pose | played in headset (the VR settings were used on the second wear; the pointer itself not commented on) |
+| Menu laser pointer from the aim pose | played in headset (the VR settings were used on the second wear; the fourth wear: often behind the panel) |
+| The pointer on its own layer, last (always on top) | verified unattended 2026-10-05 (`diag_point`, the VR settings docked by the terminal: `vr-comp1.bmp` beam and dot over the dock; layers eyes, terminal, dock, pointer); not worn |
+| Crosshair, billboard sprites and HUD quads keep world up (fourth wear: the reticle rolled with the head) | not started on the device (host-tested: `test_vr_upright.c`) |
 | Eye `RenderScale` and `EyeMsaa` | verified unattended 2026-10-04 (section 11: timings, the defaults read from `goldeneye-vr.ini`, MSAA edges in the dumps); not worn |
 | The Graphics page itself, and changing `EyeMsaa` live | not started on the device (the page was not dumped; host-tested save and load) |
 | `force_render` synthetic head, stereo eye dumps in Dam | verified unattended at yaw 0 only (yaw 90 and 180 never run) |
 | Overlay (VR settings) open and close, watch terminal and dock, HUD captures, scope target | verified unattended (cheat hooks and dumps) |
 | Seated mode, roomscale walking acceptance, spatial audio, depth submission, foveation | not started |
-| Cutscenes on the 3D cinema (projection layer, 64 mm, band, fades) and the `CutsceneMode` setting | built, not yet run on the device (maths host-tested in `test_vr_cinema.c`; the setting round-tripped in the settings test) |
+| Cutscenes on the 3D cinema (projection layer, 64 mm, band, fades) and the `CutsceneMode` setting | verified unattended 2026-10-05 (Dam's intro: section 4; far field 38 mm, 24 px); not worn. The fades and the band's messages not looked at |
+| Cinema depth (`CinemaDepth`) | not started on the device (the setting round-tripped in the settings test) |
 
 ## 9. First wear session (15 minutes)
 
@@ -625,6 +651,15 @@ Third wear (c3b3464 or edc6024): "definitely a lot better", no major issues. Two
 | --- | --- |
 | The scope's zoomed view had about twice the radius of the rifle's viewfinder | it was drawn at twice the eyepiece (an earlier "easier to use" choice). Now the circle inside the eyepiece's face, measured from the ROM; the magnification is unchanged (section 3). Verified unattended: in `vr-eye0.bmp` (Dam, `diag_aim=30`) the eyepiece's ring has a 37 px radius, and the lens layer (0.037 m at 0.300 m) covers the same 37 px; at the old size it covered 80. Not worn |
 | "The image looks quite pixelated" | the Graphics page: `RenderScale` and `EyeMsaa` (section 11). Native textures are bilinear-filtered without mipmaps (`Video.TextureFilter` 1, the port's default, not the N64's three-point); unchanged. Not worn |
+
+Fourth wear (6425527, late on 2026-10-04; the 3D cinema was merged after it):
+
+| Finding | Status |
+| --- | --- |
+| The menu laser often appeared behind the screen or panel | the beam was drawn into the eye layer, and the terminal's page, its docked VR settings, the HUD quads and the cinema are layers submitted after it. Now the pointer is its own projection layer, submitted last (section 2, "The menu pointer is always on top"); the eye image's cut-out for it is gone. Verified unattended (`diag_point` on the docked VR settings, `vr-comp1.bmp`). Not worn |
+| The sniper scope's image shifted right the closer the rifle came to the eye (held to the right eye) | near the eyes the lens quad was turned toward, and pushed out along, the ray from the head's centre (the compositor's near plane), so it left the aiming eye's line of sight: 17 degrees at 6 cm. Decided: the scope is optics, a collimated image on the gun's axis seen through each eye's own window; the far eye sees the same image (no mismatched copy) or the dark glass where its window leaves the field. Verified unattended at 30, 15 and 6 cm from the right eye: no drift (section 3). Not worn |
+| The aiming reticle rotated and shifted with head rotation; the same for billboards | the stereo camera keeps the head's roll and the sight and the sprites were built on its axes. Now they keep world up (section 3, the crosshair row); the HUD quads too. Host-tested; the unattended `diag_roll` check not yet run. Not worn |
+| (asked) The 3D cinema's depth may be shallow | measured: the far hills 38 mm apart on the 3 m screen (24 px), about 7.4 m away. A Cinema depth setting (50-150 %) is on the DISPLAY page (section 4). Not worn |
 
 
 ## 11. Eye resolution and MSAA (measured 2026-10-04)
