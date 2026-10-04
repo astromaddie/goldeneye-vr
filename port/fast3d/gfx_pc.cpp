@@ -157,6 +157,72 @@ extern "C" void gevrVrMarkRedrawn(void);
 #ifdef GEVR_STEAM_FRAME
 // vr_launcher.cpp: the in-game VR settings, drawn into their own texture; 0 while they are closed
 extern "C" int gevrVrSettingsOverlayDraw(unsigned *tex, int *w, int *h);
+
+/*
+ * The paused watch (watch option D, 2026-10-04): its screen hangs world-locked
+ * in front (vr_openxr.cpp gevrVrWatchScreen) and the world stays in stereo
+ * behind it - the last stereo frame, frozen as the pause began, drawn every XR
+ * frame from the head's pose, darkened to GEVR_PAUSE_DIM with a soft vignette.
+ */
+#include "vr_diag.h"
+#define GEVR_PAUSE_DIM   0.40f   // of the world's brightness (display-encoded values, as the mockup's 60% dim)
+#define GEVR_PAUSE_EDGE  0.50f   // ... times this at the edges of the view
+extern "C" int gevrVrWatchScreenUp(void);              // vr_openxr.cpp
+extern "C" int gevrVrFreezeViews(void);
+extern "C" void gevrVrUnfreezeViews(void);
+extern "C" int gevrVrFrozenDelta(float out[16]);
+extern "C" void gevrVrSetEyeBackdrop(int mode);
+extern "C" int vr_pointer_wanted(void);
+extern "C" void vr_screen_cut_eyes(void);
+bool gfx_vr_frozen_take(char* why, size_t whyLen);     // gfx_opengl.cpp
+void gfx_vr_frozen_drop(void);
+bool gfx_vr_frozen_ready(void);
+void gfx_vr_frozen_replay(const float* head);
+void gfx_opengl_draw_dim(float level, float edge);
+
+// Once a game frame, before its passes: keep the last stereo frame as the watch comes up.
+static void gevr_watch_freeze_step(bool screenMode)
+{
+    static bool tried;
+    const bool up = screenMode && gevrVrWatchScreenUp() != 0;
+    if (up && !tried) {
+        tried = true;
+        char why[160] = "";
+        if (gevrDiag()->watch_backdrop < 0) {
+            sysLogPrintf(LOG_NOTE, "[vr] paused world: off (vr-diag.ini watch_backdrop=0): black behind the watch");
+        } else if (!gevrVrFreezeViews()) {
+            sysLogPrintf(LOG_NOTE, "[vr] paused world: none (no stereo camera views kept): black behind the watch");
+        } else if (!gfx_vr_frozen_take(why, sizeof(why))) {
+            gevrVrUnfreezeViews();
+            sysLogPrintf(LOG_NOTE, "[vr] paused world: none (%s): black behind the watch", why);
+        } else {
+            sysLogPrintf(LOG_NOTE, "[vr] paused world: frozen replay (dim %.2f, edges %.2f; %s)",
+                         GEVR_PAUSE_DIM, GEVR_PAUSE_DIM * GEVR_PAUSE_EDGE, why);
+        }
+    } else if (!up && tried) {
+        tried = false;
+        gfx_vr_frozen_drop();
+        gevrVrUnfreezeViews();
+    }
+}
+
+// Into the eye buffers just cleared: the paused world, if there is one. The pointer goes after.
+static bool gevr_watch_backdrop(void)
+{
+    float head[16];
+    if (!gevrVrWatchScreenUp() || !gfx_vr_frozen_ready() || !gevrVrFrozenDelta(head)) {
+        return false;
+    }
+    gfx_vr_frozen_replay(head);
+    gfx_opengl_draw_dim(GEVR_PAUSE_DIM, GEVR_PAUSE_EDGE);
+    const bool cut = vr_pointer_wanted() != 0;
+    if (cut) {
+        vr_screen_cut_eyes();   // the eye layer then goes over the screen, for the pointer
+    }
+    gevrVrMarkRedrawn();        // drawn for this XR frame's own views
+    gevrVrSetEyeBackdrop(cut ? 2 : 1);
+    return true;
+}
 #endif
 extern "C" float g_viProjectionMatrixF[4][4];     // fr.c: the game's projection
 static float s_gevrLastVignette;                  // the eye pass's, for its redraws
@@ -4610,6 +4676,9 @@ extern "C" void gfx_run(Gfx* commands) {
             }
         };
 
+#ifdef GEVR_STEAM_FRAME
+        gevr_watch_freeze_step(screenMode);
+#endif
         // Screen pass: the game's frame into the off-screen target.
         bool screenRendered = false;
         bool overlayUp = false;
@@ -4650,10 +4719,14 @@ extern "C" void gfx_run(Gfx* commands) {
 
             if (screenRendered) {
                 gevrVrMarkEyesRendered(0);
+#ifdef GEVR_STEAM_FRAME
+                // The paused watch: the frozen world behind its screen.
+                gevr_watch_backdrop();
+#endif
                 vr_pointer_draw();
-                // The eye buffers stay black behind the screen (cleared by
-                // vr_begin_eye_render). A surround, if one is ever wanted, is
-                // drawn here; the pause-hub grid was tried and rejected.
+                // Otherwise the eye buffers stay black behind the screen
+                // (cleared by vr_begin_eye_render); the pause-hub grid was
+                // tried as a surround and rejected.
             } else {
                 // 3) Render the game directly into the headset texture
                 // (its draws kept for the XR frames before the next game frame: issue #53)
@@ -4743,6 +4816,24 @@ extern "C" void gfx_run(Gfx* commands) {
  */
 extern "C" int gfx_vr_redraw_frame(void) {
     float delta[16];
+
+#ifdef GEVR_STEAM_FRAME
+    // The paused watch: its frozen world is drawn on every XR frame, from that frame's head pose.
+    if (vr_is_initialized() && gfx_rapi->is_multiview() && gevrVrScreenMode && gevrVrWatchScreenUp()
+        && gfx_vr_frozen_ready() && gevrVrFrozenDelta(delta)) {
+        vrFramePerfSetRedraw(1);
+        if (!vr_begin_eye_render()) {
+            vrFramePerfSetRedraw(0);
+            return 0;
+        }
+        gfx_rapi->start_draw_to_framebuffer(0, 1.0f);
+        gevr_watch_backdrop();
+        vr_pointer_draw();
+        vr_end_eye_render();
+        vrFramePerfSetRedraw(0);
+        return 1;
+    }
+#endif
 
     if (!vr_is_initialized() || !gfx_rapi->is_multiview() || gevrVrScreenMode
         || !gfx_vr_eye_replay_ready() || !gevrVrRedrawDelta(delta)) {
