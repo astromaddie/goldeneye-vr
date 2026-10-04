@@ -16,8 +16,40 @@ extern "C" {
 
 /* ---- force_render: a synthetic head --------------------------------------- */
 int  vrFrameForceRender(void);
-/* The synthetic head in the play space (OpenXR axes, metres): 1.6 m up, yaw = diag_yaw. */
+/* The synthetic head in the play space (OpenXR axes, metres): 1.6 m up, yaw = diag_yaw, then rolled by
+ * diag_roll (right ear down positive). */
 void vrFrameSynthHead(float pos[3], float quat[4]);
+/* The same without the roll: the parked hands hang from it, so a rolled head leaves them in place. */
+void vrFrameSynthBody(float quat[4]);
+
+/* ---- the composited view (dumps) --------------------------------------------- */
+/* Every swapchain image acquired (any layer): the GL texture each swapchain shows next, so a dump can
+ * read every layer as submitted. `swapchain` is the XrSwapchain handle. */
+void vrFrameNoteImage(uint64_t swapchain, unsigned tex);
+unsigned vrFrameImageOf(uint64_t swapchain);
+
+/* One submitted layer, in play space (vr_openxr.cpp turns view-space ones by the head). */
+typedef struct VrCompLayer {
+    const char *name;
+    int kind;                 /* 0 projection, 1 quad, 2 not composited (a cylinder) */
+    int blend;                /* XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT: premultiplied over */
+    unsigned tex[2];          /* projection: per eye; quad: [0] */
+    int arrayIndex[2];
+    int rect[2][4];           /* x, y, w, h (GL rows from the bottom) */
+    float pos[2][3];          /* projection: each view's position; quad: [0] its centre */
+    float quat[2][4];         /* x y z w */
+    float fovTan[2][4];       /* projection: tan of left, right, up, down */
+    float size[2];            /* quad: metres */
+} VrCompLayer;
+/* While a dump is due and the eyes were written this frame: the layers back to front, composited
+ * as the compositor does it (rotation-only projection layers, ray-cast quads, premultiplied alpha) for
+ * each eye at half the eye size: vr-dumps/vr-comp0.bmp and vr-comp1.bmp, the list in the log. */
+void vrFrameCompose(const VrCompLayer *layers, int n, const float eyePos[2][3], const float eyeQuat[2][4],
+                    const float eyeFovTan[2][4], int eyeW, int eyeH);
+/* The eyes of this XR frame were dumped (the composite goes with them). */
+int  vrFrameDumpEyesWritten(void);
+/* A gevr_cheat.txt word was applied (bondview2.c): arms vr-diag.ini dump_cheat_frame. */
+void vrFrameDumpCheatApplied(const char *word);
 
 /* ---- dumps ----------------------------------------------------------------- */
 /* Called once per XR frame that begins rendering. */
@@ -52,8 +84,8 @@ int  vrFrameScopeDumpDue(void);
 void vrFrameScopeDumpTarget(int hand, unsigned tex, int layer, int w, int h, const char *state);
 /* vr_openxr.cpp: whether this hand's lens copy is to be dumped now. */
 int  vrFrameScopeLensDue(int hand);
-/* Write vr-dumps/vr-scope-lens.bmp from the framebuffer bound to GL_DRAW_FRAMEBUFFER's texture
- * `image` (the lens's swapchain image, just written), and add `state` to vr-scope.txt. */
+/* Write vr-dumps/vr-scope-lens0.bmp and vr-scope-lens1.bmp from layers 0 and 1 of `image` (the lens's
+ * two-layer swapchain image, just written: each eye's window), and add `state` to vr-scope.txt. */
 void vrFrameScopeDumpLens(int hand, unsigned image, int w, int h, const char *state);
 /* A line for vr-scope.txt and the log (the lens layer as submitted), only right after the lens dump. */
 void vrFrameScopeNote(int hand, const char *line);

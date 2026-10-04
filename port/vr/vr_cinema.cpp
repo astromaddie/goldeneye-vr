@@ -344,6 +344,7 @@ extern "C" int gevrCinemaPresent(unsigned srcArrayTex, int w, int h)
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
     const GLuint image = s_chain.images[idx].image;
+    vrFrameNoteImage((uint64_t)(uintptr_t)s_chain.sc, image);   // the composited dump
     const GLint band = (GLint)bandH;
     for (int layer = 0; layer < 2; layer++) {
         // GL rows run up from the bottom: the band in rows 0..band, the picture above it
@@ -535,6 +536,7 @@ static bool fade_write(float alpha)
     if (!fbo) glGenFramebuffers(1, &fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_fadeImages[idx].image, 0);
+    vrFrameNoteImage((uint64_t)(uintptr_t)s_fadeSc, s_fadeImages[idx].image);
     glDisable(GL_SCISSOR_TEST);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glClearColor(0.0f, 0.0f, 0.0f, alpha);   // black: premultiplied or not, the same

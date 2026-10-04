@@ -37,8 +37,15 @@ typedef struct GevrDiag {
                                   it named (first time at once, then counts every 300 game frames), 0 = off */
     int   dump_hud;            /* on the Nth game frame that submits a HUD capture: vr-dumps/vr-hud-L/R/H/P.bmp (the
                                   captures' images as copied to their quad layers), 0 = off */
-    float diag_aim;            /* force_render: the gun hand raised so the scope's eyepiece is this many cm ahead of the
-                                  left eye, on its line of sight (dump_scope then dumps the eyes too), 0 = parked */
+    float diag_aim;            /* force_render: the gun hand raised so the scope's eyepiece is this many cm ahead of an
+                                  eye (diag_aim_eye), on its line of sight (dump_scope then dumps the eyes too), 0 = parked */
+    int   diag_aim_eye;        /* diag_aim's eye: 0 left (the default), 1 right */
+    float diag_roll;           /* force_render: the synthetic head's roll in degrees, positive = right ear down; the
+                                  parked hands stay where they are (they hang from the unrolled head) */
+    int   diag_point;          /* force_render: the right hand's aim pose points at the panel that is up (the virtual
+                                  screen, or the VR settings docked by the watch terminal), 0 = parked */
+    int   dump_cheat_frame;    /* the dump_frame files this many XR frames after a gevr_cheat.txt word is applied (a
+                                  "boom", "vrsettings"), 0 = off */
     float render_scale;        /* this run's eye resolution scale instead of the ini's RenderScale, 0 = the ini's */
     int   msaa;                /* this run's eye MSAA samples (1, 2, 4) instead of the ini's EyeMsaa, 0 = the ini's */
     int   dump_cinema_frame;   /* the dump_frame files this many XR frames after the 3D cinema is placed (a cutscene

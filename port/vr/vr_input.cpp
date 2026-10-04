@@ -2351,53 +2351,79 @@ extern "C" void vrInputReleaseAll(void)
 // of the hips, where a gun hangs in the lower corner of the view. Their view-space poses are
 // set, and the play-space ones the game's own camera snapshot reads when the session is not
 // focused; every button reads as released (the action states are inactive then anyway).
+// They hang from the head without its roll (vrFrameSynthBody), so diag_roll tilts the head alone.
+extern "C" void vrFrameSynthBody(float quat[4]);                                    // vr_frame.cpp
+extern "C" int gevrVrDiagPointPose(const float origin[3], float quat[4]);          // vr_openxr.cpp
 extern "C" void gevrVrDiagParkHands(const float headPos[3], const float headQuat[4])
 {
     // grip pose with the barrel (-Y) forward and the thumb side (-Z) up: +90 degrees about X
     static const float kRestPos[2][3] = { { -0.17f, -0.28f, -0.36f }, { 0.17f, -0.28f, -0.36f } };
     const XrQuaternionf rest = { 0.70710678f, 0.0f, 0.0f, 0.70710678f };
     const XrQuaternionf hq = { headQuat[0], headQuat[1], headQuat[2], headQuat[3] };
+    float bqf[4];
+    vrFrameSynthBody(bqf);
+    const XrQuaternionf bq = { bqf[0], bqf[1], bqf[2], bqf[3] };
     float restPos[2][3];
     memcpy(restPos, kRestPos, sizeof(restPos));
     {
         // vr-diag.ini diag_aim: the gun hand (controller 1) raised so the scope's eyepiece sits
-        // diag_aim cm ahead of the left eye (64 mm IPD: x -0.032), on its line of sight. The
-        // lens's offset from the grip is the game's (bondview2.c gevrScopeLensPlace), taken
-        // along the view's axes: the parked grip's gun points ahead with its up the view's up.
+        // diag_aim cm ahead of an eye (diag_aim_eye: 0 left, 1 right; 64 mm IPD: x -/+0.032), on its
+        // line of sight. The lens's offset from the grip is the game's (bondview2.c
+        // gevrScopeLensPlace), taken along the view's axes: the parked grip's gun points ahead with
+        // its up the view's up.
         const float d = gevrDiag()->diag_aim / 100.0f;
         if (d > 0.0f) {
             const float *lens = gevrScope[0].lens;
             const bool known = lens[3] > 0.0f;
+            const bool right = gevrDiag()->diag_aim_eye != 0;
             const float side = known ? lens[0] : 0.016f, up = known ? lens[1] : 0.127f, back = known ? lens[2] : 0.105f;
-            restPos[1][0] = -0.032f - side;
+            restPos[1][0] = (right ? 0.032f : -0.032f) - side;
             restPos[1][1] = -up;
             restPos[1][2] = -d - back;
             static int logged;
             if (!logged || (known && logged == 1)) {
                 logged = known ? 2 : 1;
-                vr_log("[vr-diag] diag_aim: gun hand at (%.3f %.3f %.3f) m, the eyepiece %.0f cm ahead of the left eye%s",
-                       restPos[1][0], restPos[1][1], restPos[1][2], d * 100.0f, known ? "" : " (default lens offset)");
+                vr_log("[vr-diag] diag_aim: gun hand at (%.3f %.3f %.3f) m, the eyepiece %.0f cm ahead of the %s eye%s",
+                       restPos[1][0], restPos[1][1], restPos[1][2], d * 100.0f, right ? "right" : "left",
+                       known ? "" : " (default lens offset)");
             }
         }
     }
+    auto qmul = [](const XrQuaternionf &a, const XrQuaternionf &b) -> XrQuaternionf {
+        return { a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y, a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+                 a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w, a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z };
+    };
+    auto qrot = [](const XrQuaternionf &q, const float v[3], float out[3]) {
+        const float tx = 2.0f * (q.y * v[2] - q.z * v[1]);
+        const float ty = 2.0f * (q.z * v[0] - q.x * v[2]);
+        const float tz = 2.0f * (q.x * v[1] - q.y * v[0]);
+        out[0] = v[0] + q.w * tx + (q.y * tz - q.z * ty);
+        out[1] = v[1] + q.w * ty + (q.z * tx - q.x * tz);
+        out[2] = v[2] + q.w * tz + (q.x * ty - q.y * tx);
+    };
+    const XrQuaternionf hqInv = { -hq.x, -hq.y, -hq.z, hq.w };
     for (int h = 0; h < 2; h++) {
         ControllerInputState& st = gControllerStates[h];
         st.is_active = false;
-        st.controller_pose.position = { restPos[h][0], restPos[h][1], restPos[h][2] };
-        st.controller_pose.orientation = rest;
-        // play = head * view
-        const float qx = hq.x, qy = hq.y, qz = hq.z, qw = hq.w;
-        const float vx = restPos[h][0], vy = restPos[h][1], vz = restPos[h][2];
-        const float tx = 2.0f * (qy * vz - qz * vy);
-        const float ty = 2.0f * (qz * vx - qx * vz);
-        const float tz = 2.0f * (qx * vy - qy * vx);
-        gCtrlPosePlay[h].position = { headPos[0] + vx + qw * tx + (qy * tz - qz * ty),
-                                      headPos[1] + vy + qw * ty + (qz * tx - qx * tz),
-                                      headPos[2] + vz + qw * tz + (qx * ty - qy * tx) };
-        gCtrlPosePlay[h].orientation = { qw * rest.x + qx * rest.w + qy * rest.z - qz * rest.y,
-                                         qw * rest.y - qx * rest.z + qy * rest.w + qz * rest.x,
-                                         qw * rest.z + qx * rest.y - qy * rest.x + qz * rest.w,
-                                         qw * rest.w - qx * rest.x - qy * rest.y - qz * rest.z };
+        // play = head (without roll) * rest; view = head^-1 * (play - head)
+        float pp[3];
+        qrot(bq, restPos[h], pp);
+        const XrQuaternionf po = qmul(bq, rest);
+        gCtrlPosePlay[h].position = { headPos[0] + pp[0], headPos[1] + pp[1], headPos[2] + pp[2] };
+        gCtrlPosePlay[h].orientation = po;
+        float vpos[3];
+        qrot(hqInv, pp, vpos);
+        st.controller_pose.position = { vpos[0], vpos[1], vpos[2] };
+        st.controller_pose.orientation = qmul(hqInv, po);
+        if (h == 1 && gevrDiag()->diag_point) {
+            // vr-diag.ini diag_point: the right hand's aim pose points at the panel that is up
+            const float o[3] = { gCtrlPosePlay[h].position.x, gCtrlPosePlay[h].position.y, gCtrlPosePlay[h].position.z };
+            float aq[4];
+            if (gevrVrDiagPointPose(o, aq)) {
+                gAimPosePlay[h].position = gCtrlPosePlay[h].position;
+                gAimPosePlay[h].orientation = { aq[0], aq[1], aq[2], aq[3] };
+            }
+        }
         st.select.currentState = XR_FALSE;
         st.menu.currentState = XR_FALSE;
         st.button_a.currentState = st.button_b.currentState = XR_FALSE;

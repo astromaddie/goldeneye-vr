@@ -252,6 +252,7 @@ static bool term_copy(TermChain &c, Attach attach, int sw, int sh, bool frame, c
     glBindFramebuffer(GL_READ_FRAMEBUFFER, srcFbo);
     attach();
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dstFbo);
+    vrFrameNoteImage((uint64_t)(uintptr_t)c.sc, c.images[idx].image);   // the composited dump
     glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, c.images[idx].image, 0);
     glDisable(GL_SCISSOR_TEST);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);

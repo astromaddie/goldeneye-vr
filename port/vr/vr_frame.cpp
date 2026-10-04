@@ -32,12 +32,25 @@ double vrFrameNowMs(void)
 
 extern "C" int vrFrameForceRender(void) { return gevrDiag()->force_render; }
 
+/* yaw (diag_yaw) then roll (diag_roll, right ear down positive: about the view's +Z by -roll) */
 extern "C" void vrFrameSynthHead(float pos[3], float quat[4])
 {
     const float yaw = gevrDiag()->diag_yaw * 3.14159265f / 180.0f;
+    const float roll = -gevrDiag()->diag_roll * 3.14159265f / 180.0f;
+    const float sy = sinf(yaw * 0.5f), cy = cosf(yaw * 0.5f), sz = sinf(roll * 0.5f), cz = cosf(roll * 0.5f);
     pos[0] = 0.0f;
     pos[1] = 1.6f;
     pos[2] = 0.0f;
+    quat[0] = sy * sz;
+    quat[1] = sy * cz;
+    quat[2] = cy * sz;
+    quat[3] = cy * cz;
+}
+
+/* the synthetic head without its roll: where force_render's parked hands hang from */
+extern "C" void vrFrameSynthBody(float quat[4])
+{
+    const float yaw = gevrDiag()->diag_yaw * 3.14159265f / 180.0f;
     quat[0] = 0.0f;
     quat[1] = sinf(yaw * 0.5f);
     quat[2] = 0.0f;
@@ -59,6 +72,7 @@ static bool s_stateWritten;
 static uint64_t s_xrFrame;           /* the XR frame being drawn (vrFrameDumpFrameBegin) */
 static uint64_t s_watchDumpAt;       /* dump_watch_frame: the XR frame to dump at, 0 = not armed */
 static bool s_dumpNeedScreen;        /* this dump is complete only with the virtual screen too */
+static bool s_armedNeedsScreen = true; /* the armed dump (s_watchDumpAt) wants a screen or panel image */
 static bool s_dumpScreenOk;
 
 static bool write_bmp24(const char *path, const uint8_t *rgba, int w, int h, unsigned *opaquePct)
@@ -275,7 +289,7 @@ extern "C" void vrFrameDumpFrameBegin(uint64_t xrFrame)
     /* dump_watch_frame: N XR frames after the paused watch's screen was placed, eyes and screen */
     if (s_watchDumpAt != 0 && xrFrame >= s_watchDumpAt) {
         s_dumpActive = true;
-        s_dumpNeedScreen = true;
+        s_dumpNeedScreen = s_armedNeedsScreen;
     }
     /* from frame N on, until a frame really draws the eyes: frame N itself may draw none
      * (a redraw with nothing to replay, a mode switch) */
@@ -304,6 +318,175 @@ extern "C" void vrFrameDumpWatchPlaced(void)
         FLOG("[vr-dump] armed for the paused watch: XR frame %llu (%d after the screen was placed)",
              (unsigned long long)s_watchDumpAt, d->dump_watch_frame);
     }
+}
+
+extern "C" void vrFrameDumpCheatApplied(const char *word)
+{
+    const GevrDiag *d = gevrDiag();
+    if (d->dump_cheat_frame > 0 && !s_dumpDone && s_watchDumpAt == 0) {
+        s_watchDumpAt = s_xrFrame + (uint64_t)d->dump_cheat_frame;
+        s_armedNeedsScreen = word != nullptr && strcmp(word, "vrsettings") == 0;   /* "boom": the stereo view alone */
+        FLOG("[vr-dump] armed by the cheat hook ('%s'): XR frame %llu (%d after)", word ? word : "?",
+             (unsigned long long)s_watchDumpAt, d->dump_cheat_frame);
+    }
+}
+
+extern "C" int vrFrameDumpEyesWritten(void) { return s_dumpActive && s_dumpEyesOk ? 1 : 0; }
+
+/* ------------------------------------------------------------ the composited view */
+
+static struct { uint64_t sc; unsigned tex; } s_images[24];
+
+extern "C" void vrFrameNoteImage(uint64_t swapchain, unsigned tex)
+{
+    int freeSlot = -1;
+    for (int i = 0; i < 24; i++) {
+        if (s_images[i].sc == swapchain) {
+            s_images[i].tex = tex;
+            return;
+        }
+        if (freeSlot < 0 && s_images[i].sc == 0) freeSlot = i;
+    }
+    if (freeSlot >= 0) {
+        s_images[freeSlot].sc = swapchain;
+        s_images[freeSlot].tex = tex;
+    }
+}
+
+extern "C" unsigned vrFrameImageOf(uint64_t swapchain)
+{
+    for (int i = 0; i < 24; i++) {
+        if (s_images[i].sc == swapchain) return s_images[i].tex;
+    }
+    return 0;
+}
+
+/* one layer of a texture's rect, RGBA, GL rows from the bottom */
+static bool read_rect(unsigned tex, int layer, const int rect[4], std::vector<uint8_t> &px)
+{
+    static GLuint fbo = 0;
+    if (!tex || rect[2] <= 0 || rect[3] <= 0) return false;
+    GLint prevRead = 0, prevAlign = 4;
+    if (!fbo) glGenFramebuffers(1, &fbo);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevRead);
+    glGetIntegerv(GL_PACK_ALIGNMENT, &prevAlign);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+    /* an array texture or a plain 2D one: try the layer, then 2D */
+    for (int n = 0; n < 16 && glGetError() != GL_NO_ERROR; n++) {}
+    glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, tex, 0, layer);
+    bool layered = glGetError() == GL_NO_ERROR && glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    if (!layered) {
+        glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, 0, 0, 0);
+        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    }
+    bool ok = glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    if (ok) {
+        px.resize((size_t)rect[2] * rect[3] * 4);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadBuffer(GL_COLOR_ATTACHMENT0);
+        glReadPixels(rect[0], rect[1], rect[2], rect[3], GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+        ok = glGetError() == GL_NO_ERROR;
+        glPixelStorei(GL_PACK_ALIGNMENT, prevAlign);
+    }
+    if (layered) {
+        glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, 0, 0, 0);
+    } else {
+        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+    }
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)prevRead);
+    return ok;
+}
+
+/* v' = q v q* */
+static void quat_rot(const float q[4], const float v[3], float out[3])
+{
+    const float x = q[0], y = q[1], z = q[2], w = q[3];
+    const float tx = 2.0f * (y * v[2] - z * v[1]), ty = 2.0f * (z * v[0] - x * v[2]), tz = 2.0f * (x * v[1] - y * v[0]);
+    out[0] = v[0] + w * tx + (y * tz - z * ty);
+    out[1] = v[1] + w * ty + (z * tx - x * tz);
+    out[2] = v[2] + w * tz + (x * ty - y * tx);
+}
+
+static void quat_rot_inv(const float q[4], const float v[3], float out[3])
+{
+    const float c[4] = { -q[0], -q[1], -q[2], q[3] };
+    quat_rot(c, v, out);
+}
+
+extern "C" void vrFrameCompose(const VrCompLayer *layers, int n, const float eyePos[2][3], const float eyeQuat[2][4],
+                               const float eyeFovTan[2][4], int eyeW, int eyeH)
+{
+    const int W = eyeW / 2, H = eyeH / 2;
+    if (W <= 0 || H <= 0 || n <= 0) return;
+    /* every layer's images, read once */
+    std::vector<std::vector<uint8_t>> img((size_t)n * 2);
+    std::vector<int> ok((size_t)n * 2, 0);
+    char list[512] = "";
+    for (int l = 0; l < n; l++) {
+        const VrCompLayer &L = layers[l];
+        for (int e = 0; e < (L.kind == 0 ? 2 : 1); e++) {
+            ok[(size_t)l * 2 + e] = L.kind != 2 && read_rect(L.tex[e], L.arrayIndex[e], L.rect[e], img[(size_t)l * 2 + e]);
+        }
+        char item[96];
+        snprintf(item, sizeof(item), "%s%s%s%s", l ? ", " : "", L.name, L.blend ? "(alpha)" : "(opaque)",
+                 L.kind == 2 ? "[not composited]" : (ok[(size_t)l * 2] ? "" : "[unread]"));
+        strncat(list, item, sizeof(list) - strlen(list) - 1);
+    }
+    std::vector<uint8_t> out((size_t)W * H * 4);
+    for (int e = 0; e < 2; e++) {
+        for (int j = 0; j < H; j++) {
+            for (int i = 0; i < W; i++) {
+                /* this eye pixel's ray, play space */
+                const float tx = eyeFovTan[e][0] + (i + 0.5f) / W * (eyeFovTan[e][1] - eyeFovTan[e][0]);
+                const float ty = eyeFovTan[e][3] + (j + 0.5f) / H * (eyeFovTan[e][2] - eyeFovTan[e][3]);
+                const float dl[3] = { tx, ty, -1.0f };
+                float d[3];
+                quat_rot(eyeQuat[e], dl, d);
+                float acc[3] = { 0.0f, 0.0f, 0.0f };
+                for (int l = 0; l < n; l++) {
+                    const VrCompLayer &L = layers[l];
+                    const int ie = L.kind == 0 ? e : 0;
+                    if (!ok[(size_t)l * 2 + ie]) continue;
+                    float u, v;
+                    if (L.kind == 0) {
+                        float lv[3];
+                        quat_rot_inv(L.quat[e], d, lv);
+                        if (lv[2] >= -1e-6f) continue;
+                        const float a = lv[0] / -lv[2], b = lv[1] / -lv[2];
+                        u = (a - L.fovTan[e][0]) / (L.fovTan[e][1] - L.fovTan[e][0]);
+                        v = (b - L.fovTan[e][3]) / (L.fovTan[e][2] - L.fovTan[e][3]);
+                    } else {
+                        const float rel[3] = { eyePos[e][0] - L.pos[0][0], eyePos[e][1] - L.pos[0][1], eyePos[e][2] - L.pos[0][2] };
+                        float o[3], dq[3];
+                        quat_rot_inv(L.quat[0], rel, o);
+                        quat_rot_inv(L.quat[0], d, dq);
+                        if (fabsf(dq[2]) < 1e-6f) continue;
+                        const float t = -o[2] / dq[2];
+                        if (t <= 0.0f) continue;
+                        u = (o[0] + t * dq[0]) / L.size[0] + 0.5f;
+                        v = (o[1] + t * dq[1]) / L.size[1] + 0.5f;
+                    }
+                    if (!(u >= 0.0f && u < 1.0f && v >= 0.0f && v < 1.0f)) continue;
+                    const int w = L.rect[ie][2], h = L.rect[ie][3];
+                    const uint8_t *p = &img[(size_t)l * 2 + ie][((size_t)(int)(v * h) * w + (int)(u * w)) * 4];
+                    if (L.blend) {
+                        const float a = p[3] / 255.0f;
+                        for (int c = 0; c < 3; c++) acc[c] = p[c] / 255.0f + (1.0f - a) * acc[c];
+                    } else {
+                        for (int c = 0; c < 3; c++) acc[c] = p[c] / 255.0f;
+                    }
+                }
+                uint8_t *q = &out[((size_t)j * W + i) * 4];
+                for (int c = 0; c < 3; c++) q[c] = (uint8_t)(fminf(acc[c], 1.0f) * 255.0f + 0.5f);
+                q[3] = 255;
+            }
+        }
+        mkdir(kDumpDir, 0777);
+        char path[128];
+        snprintf(path, sizeof(path), "%s/vr-comp%d.bmp", kDumpDir, e);
+        write_bmp24(path, out.data(), W, H, nullptr);
+    }
+    FLOG("[vr-dump] composited: vr-comp0.bmp/vr-comp1.bmp %dx%d, layers back to front: %s", W, H, list);
 }
 
 extern "C" void vrFrameDumpCinemaPlaced(void)

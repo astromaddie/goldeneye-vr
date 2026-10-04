@@ -6,9 +6,12 @@
 #include "gevr_surface_math.h"
 #include "vr_motion.h"
 #include "vr_aim_math.h"
+#include "vr_upright_math.h"
 #ifdef GEVR_STEAM_FRAME
 #include "vr_cinema.h"
 #include "vr_cinema_math.h"
+#include "vr_diag.h"
+#include "vr_frame.h"
 #endif
 #endif
 #include <ultra64.h>
@@ -591,6 +594,7 @@ static void gevrCheatProbe(s32 inlevel)
             extern int gevrVrSettingsOpen(const char *why);
 
             sysLogPrintf(LOG_NOTE, "cheathook: VR settings -> %d", gevrVrSettingsOpen("cheat hook"));
+            vrFrameDumpCheatApplied(word);
             continue;
         }
 #endif
@@ -620,6 +624,27 @@ static void gevrCheatProbe(s32 inlevel)
             sysLogPrintf(LOG_NOTE, "cheathook: hold item %d", id);
             continue;
         }
+#ifdef GEVR_STEAM_FRAME
+        /* "boom": an explosion 4 m ahead of the camera, level with it - billboard sprites and their
+         * smoke to look at (the no-roll check, vr-diag.ini diag_roll); "invincible" first keeps Bond up */
+        if (strcasecmp(word, "boom") == 0 && g_CurrentPlayer->prop != NULL)
+        {
+            Mtxf *v2w = currentPlayerGetViewToWorldMtxf();
+            f32 fx = -v2w->m[2][0], fz = -v2w->m[2][2];
+            f32 fl = sqrtf(fx * fx + fz * fz);
+            struct coord3d pos = g_CurrentPlayer->prop->pos;
+
+            if (fl > 1e-6f)
+            {
+                pos.x += fx / fl * 400.0f;
+                pos.z += fz / fl * 400.0f;
+            }
+            explosionCreate(0, &pos, g_CurrentPlayer->prop->stan, EXPLOSION_DEF_PLAYER, 0, 0, g_CurrentPlayer->prop->rooms, 0);
+            sysLogPrintf(LOG_NOTE, "cheathook: boom at %.0f %.0f %.0f (4 m ahead)", pos.x, pos.y, pos.z);
+            vrFrameDumpCheatApplied(word);
+            continue;
+        }
+#endif
         id = (word[0] >= '0' && word[0] <= '9') ? atoi(word) : 0;
         for (i = 0; i < (s32) ARRAYCOUNT(names); i++)
         {

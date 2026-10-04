@@ -178,8 +178,6 @@ extern "C" int gevrVrFreezeViews(void);
 extern "C" void gevrVrUnfreezeViews(void);
 extern "C" int gevrVrFrozenDelta(float out[16]);
 extern "C" void gevrVrSetEyeBackdrop(int mode);
-extern "C" int vr_pointer_wanted(void);
-extern "C" void vr_screen_cut_eyes(void);
 bool gfx_vr_frozen_take(char* why, size_t whyLen);     // gfx_opengl.cpp
 void gfx_vr_frozen_drop(void);
 bool gfx_vr_frozen_ready(void);
@@ -212,7 +210,8 @@ static void gevr_watch_freeze_step(bool screenMode)
     }
 }
 
-// Into the eye buffers just cleared: the paused world, if there is one. The pointer goes after.
+// Into the eye buffers just cleared: the paused world, if there is one. It goes under the screen
+// or the terminal's panels, opaque; the pointer has its own layer over everything (vr_openxr.cpp).
 static bool gevr_watch_backdrop(void)
 {
     float head[16];
@@ -221,12 +220,8 @@ static bool gevr_watch_backdrop(void)
     }
     gfx_vr_frozen_replay(head);
     gfx_opengl_draw_dim(GEVR_PAUSE_DIM, GEVR_PAUSE_EDGE);
-    const bool cut = vr_pointer_wanted() != 0;
-    if (cut) {
-        vr_screen_cut_eyes();   // the eye layer then goes over the screen, for the pointer
-    }
     gevrVrMarkRedrawn();        // drawn for this XR frame's own views
-    gevrVrSetEyeBackdrop(cut ? 2 : 1);
+    gevrVrSetEyeBackdrop(1);
     return true;
 }
 
@@ -5029,8 +5024,7 @@ extern "C" int gfx_vr_redraw_frame(void) {
             return 0;
         }
         gfx_rapi->start_draw_to_framebuffer(0, 1.0f);
-        gevr_watch_backdrop();
-        vr_pointer_draw();
+        gevr_watch_backdrop();   // the pointer is its own layer (vr_openxr.cpp vr_pointer_layer)
         gevrGlProbe("the paused world's in-between redraw");
         vr_end_eye_render();
         vrFramePerfSetRedraw(0);
