@@ -214,6 +214,19 @@ extern "C" void vrFrameDumpScreen(int w, int h)
     }
 }
 
+extern "C" void vrFrameDumpPanel(const char *name, int w, int h)
+{
+    unsigned pct = 0;
+    if (!s_dumpActive) return;
+    if (dump_read_framebuffer(name, w, h, &pct)) {
+        s_dumpWrote = true;
+        s_dumpScreenOk = true;
+        char extra[96];
+        snprintf(extra, sizeof(extra), " %s=%dx%d opaque_pct=%u", name, w, h, pct);
+        strncat(s_stateLine, extra, sizeof(s_stateLine) - strlen(s_stateLine) - 1);
+    }
+}
+
 extern "C" void vrFrameDumpState(const float headPos[3], const float headQuat[4], const float eyePos[2][3],
                                  const float eyeFov[2][4], uint64_t xrFrame, long long swapchainFormat)
 {

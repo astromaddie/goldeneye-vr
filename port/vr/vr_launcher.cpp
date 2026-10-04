@@ -51,6 +51,9 @@
 #include "vr_haptics.h"
 #include "vr_diag.h"
 #ifdef GEVR_STEAM_FRAME
+#include "vr_watch_terminal.h"
+#endif
+#ifdef GEVR_STEAM_FRAME
 extern "C" int gevrSystemBack(void);   // vr_system.cpp: a short View press
 #endif
 
@@ -3062,6 +3065,10 @@ extern "C" int gevrVrSettingsOpen(const char *why)
     s_ovComfort = gevrComfortRead();
     s_ovLast = SDL_GetTicks();
     s_ovInj = Injected();
+#ifdef GEVR_STEAM_FRAME
+    // ... but not over the watch terminal: there they dock beside it, which stays where it is
+    if (!gevrTermActive())
+#endif
     vr_screen_recenter();   // standard.md section 3: a menu is placed where you look as it opens
     vr_log("[vr] VR settings open (%s%s)", why ? why : "?", netIsActive() ? ", online: the match runs on" : "");
     return 1;

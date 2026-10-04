@@ -1827,6 +1827,10 @@ Gfx *draw_background_health_and_armor(Gfx *gdl, Mtx *arg1, s32 zoom_squish)
     gDPSetPrimColor(gdl++, 0, 0, 0xE6, 0xE6, 0xE6, 0x00);
     gSPMatrix(gdl++, arg1, G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
     // end initial setup.
+#ifdef GEVR_STEAM_FRAME
+    /* VR_WATCH_LCD_BEGIN: the watch terminal crops its page to what this draws (gfx_pc.cpp) */
+    gDPNoOpTag(gdl++, 0x56700002);
+#endif
 
     scale = 1;
 
@@ -1950,6 +1954,9 @@ Gfx *draw_background_health_and_armor(Gfx *gdl, Mtx *arg1, s32 zoom_squish)
         gDPSetRenderMode(gdl++, G_RM_AA_XLU_SURF, G_RM_AA_XLU_SURF2);
         gSPDisplayList(gdl++, OS_PHYSICAL_TO_K0(g_CurrentPlayer->buffer_for_watch_static_DL));
     }
+#ifdef GEVR_STEAM_FRAME
+    gDPNoOpTag(gdl++, 0x56700003); /* VR_WATCH_LCD_END */
+#endif
 
     return gdl;
 }

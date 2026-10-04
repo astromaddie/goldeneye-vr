@@ -165,6 +165,8 @@ extern "C" int gevrVrSettingsOverlayDraw(unsigned *tex, int *w, int *h);
  * frame from the head's pose, darkened to GEVR_PAUSE_DIM with a soft vignette.
  */
 #include "vr_diag.h"
+#include "vr_screen_math.h"
+#include "vr_watch_terminal.h"
 #define GEVR_PAUSE_DIM   0.40f   // of the world's brightness (display-encoded values, as the mockup's 60% dim)
 #define GEVR_PAUSE_EDGE  0.50f   // ... times this at the edges of the view
 extern "C" int gevrVrWatchScreenUp(void);              // vr_openxr.cpp
@@ -222,6 +224,47 @@ static bool gevr_watch_backdrop(void)
     gevrVrMarkRedrawn();        // drawn for this XR frame's own views
     gevrVrSetEyeBackdrop(cut ? 2 : 1);
     return true;
+}
+
+/*
+ * The watch's page for the Q-Branch terminal (watch option C, vr_watch_terminal.h). While the
+ * terminal holds the paused watch the screen pass is the page pass: the frame's display list runs
+ * into a GEVR_TERM_TEX_W x _H target at GEVR_TERM_PASS_SCALE, every draw outside the watch's page
+ * (bondview2.c tags draw_watch_current_page, VR_WATCH_PAGE_*) is skipped - the world, the arm, the
+ * bezel, the HUD - and every viewport, scissor and rectangle is cropped to the watch face: the
+ * rectangle the game's own LCD draw covered (options.c tags draw_background_health_and_armor,
+ * VR_WATCH_LCD_*), measured in native pixels from its triangles a frame before. Text, the green
+ * backdrop, the health and armour bars, the page tabs and the 3D item or controller all go through
+ * the same crop, so the page is the game's own, just with more pixels on it.
+ */
+#define VR_WATCH_PAGE_BEGIN 0x56700000
+#define VR_WATCH_PAGE_END   0x56700001
+#define VR_WATCH_LCD_BEGIN  0x56700002
+#define VR_WATCH_LCD_END    0x56700003
+static bool s_termPass;          // this screen pass is the page pass
+static bool s_termInPage;        // between VR_WATCH_PAGE_BEGIN and _END
+static bool s_termInLcd;         // between VR_WATCH_LCD_BEGIN and _END: measured
+static float s_termVp[4];        // the current viewport in native pixels: left, top, width, height
+static float s_termBox[4];       // this pass's LCD rectangle (x0, y0, x1, y1), native pixels
+static float s_termLastBox[4];   // the last page frame's
+static bool s_termLastValid;
+static bool s_termCropOn;        // the crop applies (the page pass)
+static float s_termCrop[4];      // x, y, w, h native pixels
+
+static inline bool gevr_term_skip(void) { return s_termPass && !s_termInPage; }
+
+// One clip-space vertex of the LCD's draw into this pass's rectangle, in native pixels.
+static void gevr_term_measure(float x, float y, float w)
+{
+    if (w <= 1e-5f) {
+        return;   // behind the eye: not part of a face in front of it
+    }
+    const float px = s_termVp[0] + (x / w + 1.0f) * 0.5f * s_termVp[2];
+    const float py = s_termVp[1] + (1.0f - y / w) * 0.5f * s_termVp[3];
+    if (px < s_termBox[0]) s_termBox[0] = px;
+    if (py < s_termBox[1]) s_termBox[1] = py;
+    if (px > s_termBox[2]) s_termBox[2] = px;
+    if (py > s_termBox[3]) s_termBox[3] = py;
 }
 #endif
 extern "C" float g_viProjectionMatrixF[4][4];     // fr.c: the game's projection
@@ -2557,6 +2600,17 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bo
     struct LoadedVertex* v2 = &rsp.loaded_vertices[vtx2_idx];
     struct LoadedVertex* v3 = &rsp.loaded_vertices[vtx3_idx];
     struct LoadedVertex* v_arr[3] = { v1, v2, v3 };
+#ifdef GEVR_STEAM_FRAME
+    // the watch terminal's page pass: only the page draws; the LCD's triangles are measured
+    if (gevr_term_skip()) {
+        return;
+    }
+    if (s_termInLcd && !is_rect) {
+        for (const struct LoadedVertex *v : v_arr) {
+            gevr_term_measure(v->x, v->y, v->w);
+        }
+    }
+#endif
 
     // --- CUSTOM VR HIDE: SMART REMOVAL ---
     if ((v1->clip_rej & 64) && (v2->clip_rej & 64) && (v3->clip_rej & 64)) {
@@ -3074,6 +3128,18 @@ static void gfx_adjust_viewport_or_scissor(XYWidthHeight* area, bool preserve_as
     if (vr_is_initialized()) {
         const float fboW = gevr_target_width();
         const float fboH = gevr_target_height();
+#ifdef GEVR_STEAM_FRAME
+        if (gevr_screen_pass && s_termCropOn) {
+            // the watch terminal's page pass: the crop (native pixels, y down) fills the target
+            const float k = fboW / s_termCrop[2];
+            const float bottom = (float)area->y;   // native, y down: the area's lower edge
+            area->width  = (int32_t)lroundf(area->width * k);
+            area->height = (int32_t)lroundf(area->height * k);
+            area->x      = (int32_t)lroundf((area->x - s_termCrop[0]) * k);
+            area->y      = (int32_t)lroundf(fboH - (bottom - s_termCrop[1]) * k);
+            return;
+        }
+#endif
         const float vrAspect = fboW / fboH;
 
         const float refWidth  = (float)SCREEN_WIDTH  * g_vr_internal_scale;
@@ -3126,6 +3192,12 @@ static void gfx_calc_and_set_viewport(const Vp_t* viewport) {
     rdp.viewport.y = y;
     rdp.viewport.width = width;
     rdp.viewport.height = height;
+#ifdef GEVR_STEAM_FRAME
+    s_termVp[0] = x;            // the watch terminal's measure (native pixels, y down)
+    s_termVp[1] = y - height;
+    s_termVp[2] = width;
+    s_termVp[3] = height;
+#endif
 
     if (vr_is_initialized() && !gevr_screen_pass && !gevr_head_hud_depth) {
         // The 3D viewport MUST always cover the entire VR framebuffer:
@@ -4042,6 +4114,18 @@ static void gfx_run_dl(Gfx* cmd) {
                         break;
                     }
 
+#ifdef GEVR_STEAM_FRAME
+                    case VR_WATCH_PAGE_BEGIN:   // the watch terminal's page pass (above)
+                    case VR_WATCH_PAGE_END:
+                        s_termInPage = tag_w1 == VR_WATCH_PAGE_BEGIN;
+                        break;
+
+                    case VR_WATCH_LCD_BEGIN:
+                    case VR_WATCH_LCD_END:
+                        s_termInLcd = tag_w1 == VR_WATCH_LCD_BEGIN;
+                        break;
+#endif
+
                     case VR_CULL_MIRROR_BEGIN:
                         gevrCullMirror = true;
                         break;
@@ -4676,8 +4760,34 @@ extern "C" void gfx_run(Gfx* commands) {
             }
         };
 
+        uint32_t passW = targetW, passH = targetH;
 #ifdef GEVR_STEAM_FRAME
         gevr_watch_freeze_step(screenMode);
+        // The watch terminal (vr_watch_terminal.h): this screen pass is its page pass (above).
+        static int s_termUnmeasured;
+        const bool termPass = screenMode && gevrTermPassWanted();
+        const bool termCapture = termPass && gevrTermCapture();
+        bool termMeasured = false;
+        static bool s_termWasCapture;
+        if (termCapture && !s_termWasCapture) {
+            s_termLastValid = false;   // a new page: its face is measured afresh
+            s_termUnmeasured = 0;
+        }
+        s_termWasCapture = termCapture;
+        if (termPass) {
+            static const float kNoBox[4] = { 1e9f, 1e9f, -1e9f, -1e9f };
+            passW = GEVR_TERM_TEX_W * GEVR_TERM_PASS_SCALE;
+            passH = GEVR_TERM_TEX_H * GEVR_TERM_PASS_SCALE;
+            set_target(passW, passH);
+            termMeasured = gevrTermCrop(s_termLastValid ? s_termLastBox : kNoBox, (float)SCREEN_WIDTH,
+                                        (float)SCREEN_HEIGHT, (float)GEVR_TERM_TEX_W / (float)GEVR_TERM_TEX_H,
+                                        0.03f, s_termCrop) != 0 && s_termLastValid;
+            s_termUnmeasured = termMeasured ? 0 : s_termUnmeasured + 1;
+            s_termBox[0] = s_termBox[1] = 1e9f;
+            s_termBox[2] = s_termBox[3] = -1e9f;
+            s_termPass = s_termCropOn = true;
+            s_termInPage = s_termInLcd = false;
+        }
 #endif
         // Screen pass: the game's frame into the off-screen target.
         bool screenRendered = false;
@@ -4685,7 +4795,7 @@ extern "C" void gfx_run(Gfx* commands) {
         unsigned overlayTex = 0;
         int overlayW = 0, overlayH = 0;
         if (screenMode) {
-            if (vr_screen_target_begin((int)targetW, (int)targetH)) {
+            if (vr_screen_target_begin((int)passW, (int)passH)) {
                 gevr_screen_pass = true;
                 gVrFlatPass = true;
                 gfx_rapi->start_draw_to_framebuffer(0, 1.0f);
@@ -4696,6 +4806,15 @@ extern "C" void gfx_run(Gfx* commands) {
                 gevr_screen_pass = false;
                 screenRendered = true;
             }
+#ifdef GEVR_STEAM_FRAME
+            if (termPass) {
+                s_termPass = s_termCropOn = s_termInPage = s_termInLcd = false;
+                if (termCapture && s_termBox[2] > s_termBox[0] && s_termBox[3] > s_termBox[1]) {
+                    memcpy(s_termLastBox, s_termBox, sizeof(s_termLastBox));
+                    s_termLastValid = true;
+                }
+            }
+#endif
 #ifdef GEVR_STEAM_FRAME
             // The in-game VR settings (vr_launcher.cpp): drawn now, between the game's passes,
             // and shown on the screen instead of the game's frame (which still runs underneath).
@@ -4785,6 +4904,18 @@ extern "C" void gfx_run(Gfx* commands) {
             vr_end_eye_render();
 
             // 6) The finished game frame goes to the compositor as a quad layer.
+#ifdef GEVR_STEAM_FRAME
+            if (termPass) {
+                // the watch terminal: the page to its panel once its face is measured (or, if the
+                // face never shows, the whole frame after a few tries), the VR settings to the dock
+                if (screenRendered && termCapture && (termMeasured || s_termUnmeasured > 10)) {
+                    gevrTermPresent(vr_screen_target_tex(), (int)passW, (int)passH, s_termCrop, termMeasured ? 1 : 0);
+                }
+                if (overlayUp) {
+                    gevrTermDockPresent(overlayTex, overlayW, overlayH);
+                }
+            } else
+#endif
             if (overlayUp) {
                 vr_screen_present_tex2d(overlayTex, overlayW, overlayH);
             } else if (screenRendered) {

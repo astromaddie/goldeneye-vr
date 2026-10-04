@@ -38,6 +38,7 @@
 #  include "vr_frame.h"
 #  include "vr_diag.h"
 #  include "vr_system.h"
+#  include "vr_watch_terminal.h"
 #endif
 
 #ifdef ANDROID
@@ -1829,6 +1830,14 @@ static void vr_watch_screen_place(void)
     g_screenPose.orientation = { g_watchPlace.quat[0], g_watchPlace.quat[1], g_watchPlace.quat[2], g_watchPlace.quat[3] };
     g_screenYaw = g_watchPlace.yaw;
     g_screenPlaced = true;
+#ifdef GEVR_STEAM_FRAME
+    // Option C (WatchStyle=1): the Q-Branch terminal takes the place; it logs and arms the dump
+    // itself with its first page (vr_watch_terminal.cpp).
+    gevrTermPlaceAt(head, q);
+    if (gevrTermActive()) {
+        return;
+    }
+#endif
     LOGI("[vr] watch screen placed yaw=%.1f dist=%.2f width=%.2f curved=%d (fov %.1f deg, centre %.2f m below the eyes, #%u)",
          g_watchPlace.yaw * 180.0f / 3.14159265f, g_watchPlace.dist, g_watchPlace.width, g_watchPlace.curved,
          g_watchPlace.fovDeg, GEVR_WATCH_SCREEN_DROP_M, g_watchState.placements);
@@ -1842,6 +1851,9 @@ extern "C" void vr_screen_recenter(void);
 // bondview2.c gevrStereoFrame, once a game frame (Frame build): the pause's watch is up.
 extern "C" void gevrVrWatchScreen(int on)
 {
+#ifdef GEVR_STEAM_FRAME
+    gevrTermWatchUp(on);   // first: it latches the style the placement below goes by
+#endif
     if (gevrWatchScreenStep(&g_watchState, on, 0)) {
         vr_watch_screen_place();
     } else if (!on && g_watchScreen) {
@@ -1853,6 +1865,9 @@ extern "C" void gevrVrWatchScreen(int on)
 }
 
 extern "C" int gevrVrWatchScreenUp(void) { return g_watchScreen ? 1 : 0; }
+
+// The format the virtual screen's swapchain uses, for the watch terminal's (vr_watch_terminal.cpp).
+extern "C" long long gevrVrQuadSwapchainFormat(void) { return (long long)vr_pick_swapchain_format(); }
 
 static void vr_screen_destroy_swapchain(void)
 {
@@ -2085,6 +2100,22 @@ static bool vr_screen_hit(int hand, float *u, float *v, float o[3])
 {
     float dir[3];
     g_ptrMissReason[hand] = 1;
+#ifdef GEVR_STEAM_FRAME
+    // The watch terminal: the laser is on its docked VR settings panel, or nowhere.
+    if (gevrTermPointerOwned()) {
+        if (!gevrVrPointerRayPlay(hand, o, dir)) {
+            return false;
+        }
+        if (!gevrTermHit(o, dir, u, v)) {
+            g_ptrMissReason[hand] = 2;
+            return false;
+        }
+        g_ptrRawU[hand] = *u;
+        g_ptrRawV[hand] = *v;
+        g_ptrMissReason[hand] = 0;
+        return true;
+    }
+#endif
     if (!g_screenPlaced || !g_screenVisible || g_screenW == 0 || !gevrVrPointerRayPlay(hand, o, dir)) {
         return false;
     }
@@ -2139,6 +2170,12 @@ static bool vr_screen_hit(int hand, float *u, float *v, float o[3])
 // A point on the screen's surface (play space) from its u, v.
 static void vr_screen_uv_to_world(float u, float v, float out[3])
 {
+#ifdef GEVR_STEAM_FRAME
+    if (gevrTermPointerOwned()) {
+        gevrTermUvToWorld(u, v, out);   // the docked VR settings
+        return;
+    }
+#endif
     const float cy = cosf(g_screenYaw), sy = sinf(g_screenYaw);
     const float aspect = (float)g_screenW / (float)g_screenH;
     float lx, ly, lz;           // in the screen's own frame, origin at its centre point's axis
@@ -2539,7 +2576,14 @@ extern "C" int vr_pointer_wanted(void) { return g_ptrFrame - g_ptrWantedFrame < 
  */
 extern "C" void vr_screen_cut_eyes(void)
 {
-    if (!g_screenPlaced || g_screenW == 0 || g_screenH == 0) {
+#ifdef GEVR_STEAM_FRAME
+    // The watch terminal: its panels' places instead of the screen's (the docked VR settings' laser).
+    float termCorners[2][4][3];
+    const int nTerm = gevrTermActive() ? gevrTermCorners(termCorners) : -1;
+#else
+    const int nTerm = -1;
+#endif
+    if (nTerm == 0 || (nTerm < 0 && (!g_screenPlaced || g_screenW == 0 || g_screenH == 0))) {
         return;
     }
     GLint prevProg = 0, prevVao = 0, prevBuf = 0;
@@ -2554,7 +2598,19 @@ extern "C" void vr_screen_cut_eyes(void)
     const int segs = vr_scr_curved() ? kSegs : 1;
     static float verts[kSegs * 6][7];
     int n = 0;
-    for (int i = 0; i < segs; i++) {
+#ifdef GEVR_STEAM_FRAME
+    for (int i = 0; i < nTerm; i++) {
+        const float (*c)[3] = termCorners[i];
+        const float *quad[6] = { c[0], c[1], c[2], c[0], c[2], c[3] };
+        for (int k = 0; k < 6; k++, n++) {
+            verts[n][0] = quad[k][0];
+            verts[n][1] = quad[k][1];
+            verts[n][2] = quad[k][2];
+            verts[n][3] = verts[n][4] = verts[n][5] = verts[n][6] = 0.0f;
+        }
+    }
+#endif
+    for (int i = 0; nTerm < 0 && i < segs; i++) {
         const float u0 = (float)i / segs, u1 = (float)(i + 1) / segs;
         float a[3], b[3], c[3], d[3];
         vr_screen_uv_to_world(u0, 0.0f, a);
@@ -3863,7 +3919,17 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
     // XR frames the pump closes without a game frame (72 Hz display, 60 Hz
     // game): the swapchain keeps its last image, and a frame without the
     // layer is a visible flicker.
-    const bool submitScreen = g_screenVisible && g_screenPlaced && g_screenSwapchain != XR_NULL_HANDLE;
+    bool submitScreen = g_screenVisible && g_screenPlaced && g_screenSwapchain != XR_NULL_HANDLE;
+    XrCompositionLayerQuad termLayers[2];
+#ifdef GEVR_STEAM_FRAME
+    // The watch terminal holds the paused watch: its panels instead of the virtual screen.
+    const int nTerm = gevrTermLayers(g_vrState.playSpace, termLayers);
+    if (gevrTermActive()) {
+        submitScreen = false;
+    }
+#else
+    const int nTerm = 0;
+#endif
     g_screenPending = false;
     XrCompositionLayerQuad screenLayer = {XR_TYPE_COMPOSITION_LAYER_QUAD};
     XrCompositionLayerCylinderKHR screenCyl = {XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR};
@@ -3968,12 +4034,21 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
     // paused world, opaque, and go first, behind the screen. With the pointer
     // wanted over it (the VR settings opened from the watch: 2) they keep the
     // usual order, with the screen's place cut out of the world.
+    // The watch terminal's panels (Frame build) go under the eye layer, as the screen does, when
+    // the eye image is cleared transparent (screen mode with no paused world) or has their places
+    // cut out for the laser (g_eyeBackdrop 2); over it when it holds the paused world, opaque (1),
+    // or the stereo view (closing into the watch as play resumes).
+    const bool termUnder = nTerm > 0 && g_screenVisible && g_eyeBackdrop != 1;
     int numLayers = 0;
-    const XrCompositionLayerBaseHeader* layers[10];   // screen, eyes, four menus, two scopes, room to spare
+    const XrCompositionLayerBaseHeader* layers[12];   // screen, eyes, four menus, two scopes, two watch panels, spare
     const XrCompositionLayerBaseHeader* screenHdr = screenCurved
         ? reinterpret_cast<const XrCompositionLayerBaseHeader*>(&screenCyl)
         : reinterpret_cast<const XrCompositionLayerBaseHeader*>(&screenLayer);
-    if (submitScreen && g_eyeBackdrop == 1) {
+    if (termUnder) {
+        for (int i = 0; i < nTerm; i++) layers[numLayers++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&termLayers[i]);
+        layer.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        layers[numLayers++] = reinterpret_cast<const XrCompositionLayerBaseHeader *>(&layer);
+    } else if (submitScreen && g_eyeBackdrop == 1) {
         layer.layerFlags = 0;
         layers[numLayers++] = reinterpret_cast<const XrCompositionLayerBaseHeader *>(&layer);
         layers[numLayers++] = screenHdr;
@@ -3983,6 +4058,7 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
             layer.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
         }
         layers[numLayers++] = reinterpret_cast<const XrCompositionLayerBaseHeader *>(&layer);
+        for (int i = 0; i < nTerm; i++) layers[numLayers++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&termLayers[i]);
     }
 
     if (submitMenuL) layers[numLayers++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&menuLayerL);
@@ -4587,6 +4663,21 @@ extern "C" bool vr_begin_frame_and_update_poses()
     }
 #endif
     controller_pose();
+#ifdef GEVR_STEAM_FRAME
+    {
+        // The watch terminal (vr_watch_terminal.cpp): its beam, dock and lazy re-centre for this
+        // frame, before the laser is tested against it. A system recentre places it again.
+        const XrPosef& l = g_frameViews[0].pose;
+        const XrPosef& r = g_frameViews[1].pose;
+        const float head[3] = { (l.position.x + r.position.x) * 0.5f, (l.position.y + r.position.y) * 0.5f,
+                                (l.position.z + r.position.z) * 0.5f };
+        const float q[4] = { l.orientation.x, l.orientation.y, l.orientation.z, l.orientation.w };
+        if (!g_screenPlaced && g_watchScreen && gevrTermActive()) {
+            vr_screen_recenter();
+        }
+        gevrTermFrame(head, q, (long long)g_frameState.predictedDisplayTime);
+    }
+#endif
     vr_pointer_update();
 
     return true;
@@ -4892,6 +4983,9 @@ extern "C" void vr_shutdown()
         }
     }
     vr_screen_destroy_swapchain();
+#ifdef GEVR_STEAM_FRAME
+    gevrTermDestroy();
+#endif
     g_screenRecenterTimes.clear();
 
     // 4. Reference spaces

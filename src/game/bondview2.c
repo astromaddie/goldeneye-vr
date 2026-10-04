@@ -459,10 +459,16 @@ static s32 s_gevrGestureWait;
 extern f32 watch_transition_time;
 extern void gevrVrScreenHeadLock(s32 on);
 
+#ifdef GEVR_STEAM_FRAME
+extern int gevrVrWatchTerminalStyle(void);   /* port/vr/vr_watch_terminal.cpp: WatchStyle=1 */
+extern int gevrTermActive(void);             /* ... the terminal holds the paused watch */
+extern void gevrVrWatchPage(int page);
+#endif
 static s32 gevrWatchOpeningByGesture(s32 inlevel)
 {
     static f32 normalspeed = -1.0f;
     s32 opening = FALSE;
+    s32 fast = FALSE;
 
     if (normalspeed < 0.0f)
     {
@@ -495,6 +501,19 @@ static s32 gevrWatchOpeningByGesture(s32 inlevel)
             s_gevrWatchByGesture = FALSE;
         }
         opening = s_gevrWatchByGesture && st >= 1 && st <= 4;
+#ifdef GEVR_STEAM_FRAME
+        /*
+         * The Q-Branch terminal (watch option C, port/vr/vr_watch_terminal.h): a watch opened
+         * with Menu opens in stereo too, fast and unseen, so the terminal beams out of the watch
+         * a quarter second after the press instead of after the arm and zoom on a screen. Its
+         * closing runs as fast, over the paused world, while the panel shrinks back into the watch.
+         */
+        if (gevrVrWatchTerminalStyle())
+        {
+            opening = st >= 1 && st <= 4;
+        }
+        fast = gevrTermActive() && (st == WATCH_ANIMATION_0xc || (st >= WATCH_ANIMATION_0x6 && st <= WATCH_ANIMATION_0x8));
+#endif
     }
     else
     {
@@ -502,7 +521,7 @@ static s32 gevrWatchOpeningByGesture(s32 inlevel)
         s_gevrGestureWait = 0;
     }
 
-    watch_transition_time = opening ? normalspeed * GEVR_WATCH_OPEN_SPEED : normalspeed;
+    watch_transition_time = opening || fast ? normalspeed * GEVR_WATCH_OPEN_SPEED : normalspeed;
     return opening;
 }
 
@@ -897,8 +916,13 @@ void gevrStereoFrame(s32 inlevel)
      * world-locked straight ahead from the moment it comes up (no head lock),
      * with the paused world in stereo behind it (gfx_pc.cpp gevr_watch_backdrop).
      * The VR settings opened from the watch show on that same screen. */
-    gevrVrWatchScreen(!want && inlevel && VrPlayMode != 0 && pl != NULL
-                      && pl->watch_animation_state != 0);
+    {
+        const s32 on = !want && inlevel && VrPlayMode != 0 && pl != NULL && pl->watch_animation_state != 0;
+
+        gevrVrWatchScreen(on);
+        /* option C, the Q-Branch terminal: the page it shows while the pages are up */
+        gevrVrWatchPage(on && pl->watch_animation_state == WATCH_ANIMATION_0x5 ? (s32)watch_screen_index : -1);
+    }
 #else
     gevrVrScreenHeadLock(!want && inlevel && VrPlayMode != 0 && pl != NULL
                          && pl->watch_animation_state != 0);
@@ -13209,7 +13233,13 @@ Gfx *bondviewRenderWatch(Gfx *gdl)
         matrix_4x4_7F058C64();
         matrix_4x4_f32_to_s32(&handmtx, finalmtx);
         matrix_4x4_7F058C88();
+#ifdef GEVR_STEAM_FRAME
+        gDPNoOpTag(gdl++, 0x56700000); /* VR_WATCH_PAGE_BEGIN: the watch terminal draws only this (gfx_pc.cpp) */
+#endif
         gdl = draw_watch_current_page(gdl, finalmtx, (g_CurrentPlayer->watch_animation_state == 5) || (g_CurrentPlayer->watch_animation_state == 12));
+#ifdef GEVR_STEAM_FRAME
+        gDPNoOpTag(gdl++, 0x56700001); /* VR_WATCH_PAGE_END */
+#endif
         matrix_4x4_7F058C64();
         bondviewTransformManyPosToViewMatrix(g_CurrentPlayer->something_with_watch_object_instance.render_pos, objheader->numMatrices);
         matrix_4x4_7F058C88();

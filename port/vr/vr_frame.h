@@ -30,7 +30,10 @@ int  vrFrameDumpDue(void);
 void vrFrameDumpEyes(unsigned tex, int w, int h);
 /* Write <name> from the framebuffer bound to GL_READ_FRAMEBUFFER (the virtual screen). */
 void vrFrameDumpScreen(int w, int h);
-/* The paused watch's screen was placed (vr_openxr.cpp): arms vr-diag.ini dump_watch_frame. */
+/* Write <name> (vr-watch.bmp: the watch terminal's panel) from the framebuffer bound to
+ * GL_READ_FRAMEBUFFER; counts as this dump's screen image. */
+void vrFrameDumpPanel(const char *name, int w, int h);
+/* The paused watch's screen (or terminal) was placed (vr_openxr.cpp): arms vr-diag.ini dump_watch_frame. */
 void vrFrameDumpWatchPlaced(void);
 /* State for the dump's log: called with the eye poses so the log shows what was drawn. */
 void vrFrameDumpState(const float headPos[3], const float headQuat[4], const float eyePos[2][3],
