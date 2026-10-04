@@ -18,6 +18,7 @@
 #include "vr_input.h"
 #include "vr_log.h"
 #include "vr_openxr.h"
+#include "vr_aim_math.h"
 
 
 #ifdef ANDROID
@@ -131,12 +132,17 @@ XrAction gHapticAction = XR_NULL_HANDLE;         // Haptic vibration
 XrAction gViewAction = XR_NULL_HANDLE;           // View (left): the system layer's button
 #ifdef GEVR_STEAM_FRAME
 // The aim pose: the runtime's own pointing ray for each controller (-Z forward).
-// The laser pointer uses it on the Frame; the grip pose's -Y, which the Quest
-// build points with, was tuned on Touch and leaves the Frame controller at an
-// angle to where the hand points.
+// The laser pointer uses it on the Frame, and the gun takes its turn from the grip
+// (gevrVrAimOffset): the grip pose's -Y, which the Quest build points with, was tuned
+// on Touch and leaves the Frame controller's gun 30-45 degrees below where the hand points.
 XrAction gAimPoseAction = XR_NULL_HANDLE;
 static XrSpace gAimSpace[2] = {XR_NULL_HANDLE, XR_NULL_HANDLE};
 static XrPosef gAimPosePlay[2] = {};
+// The gun's aim (vr_aim_math.h): per physical controller, the grip-local turn from its grip pose
+// to its aim pose (with the grip map's axes), measured whenever both are tracked.
+static float gAimOffset[2][4] = { { 0.0f, 0.0f, 0.0f, 1.0f }, { 0.0f, 0.0f, 0.0f, 1.0f } };
+static bool gAimOffsetValid[2];
+static float gAimOffsetLoggedDeg[2];
 #endif
 XrAction gBumperAction = XR_NULL_HANDLE;         // Bumpers
 XrAction gDpadAction[4] = { XR_NULL_HANDLE, XR_NULL_HANDLE, XR_NULL_HANDLE, XR_NULL_HANDLE };  // up down left right
@@ -719,6 +725,7 @@ XrResult update_vr_controllers(XrTime predicted_time) {
         }
 
         // Same controller, located against playSpace: the gesture frame.
+        bool gripPlayTracked = false;
         {
             XrSpaceVelocity velocity = { XR_TYPE_SPACE_VELOCITY };
             XrSpaceLocation loc = { XR_TYPE_SPACE_LOCATION };
@@ -737,6 +744,7 @@ XrResult update_vr_controllers(XrTime predicted_time) {
             if (fullyTracked) {
                 gCtrlPosePlay[hand] = loc.pose;
                 gCachedVelocityPlay[hand] = velocity;
+                gripPlayTracked = true;
             } else {
                 gCachedVelocityPlay[hand] = { XR_TYPE_SPACE_VELOCITY };
             }
@@ -750,6 +758,21 @@ XrResult update_vr_controllers(XrTime predicted_time) {
             if (XR_SUCCEEDED(res) && (f & XR_SPACE_LOCATION_POSITION_VALID_BIT) &&
                 (f & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) && (f & XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT)) {
                 gAimPosePlay[hand] = loc.pose;
+                // The gun's aim (vr_aim_math.h): the grip-to-aim turn, measured while both are
+                // tracked at this same time; the last one stays through tracking loss.
+                if (gripPlayTracked) {
+                    const XrQuaternionf& g = gCtrlPosePlay[hand].orientation;
+                    const XrQuaternionf& a = loc.pose.orientation;
+                    const float gq[4] = { g.x, g.y, g.z, g.w }, aq[4] = { a.x, a.y, a.z, a.w };
+                    gevrAimOffsetFromPoses(gq, aq, gAimOffset[hand]);
+                    const float deg = gevrQuatAngleDeg(gAimOffset[hand]);
+                    if (!gAimOffsetValid[hand] || fabsf(deg - gAimOffsetLoggedDeg[hand]) > 2.0f) {
+                        vr_log("[vr] aim offset, %s controller: grip to aim %.1f deg (barrel = aim -Z)",
+                               hand ? "right" : "left", deg);
+                        gAimOffsetLoggedDeg[hand] = deg;
+                    }
+                    gAimOffsetValid[hand] = true;
+                }
             }
         }
 #endif
@@ -1990,6 +2013,29 @@ extern "C" int gevrVrPointerRayPlay(int hand, float pos[3], float dir[3])
     dir[1] = -(1.0f - 2.0f * (qx * qx + qz * qz));
     dir[2] = -2.0f * (qy * qz + qw * qx);
     return 1;
+}
+
+/*
+ * The gun's aim on the Steam Frame (vr_aim_math.h): the grip-local turn of one controller by
+ * role (left-handed mode swaps them, as for the grip), to be applied as grip * off. 0 while it
+ * is not known (never both tracked yet, or not a Frame build): the gun is then the grip.
+ */
+extern "C" int gevrVrAimOffset(int hand, float off[4])
+{
+#ifdef GEVR_STEAM_FRAME
+    if (hand >= 0 && hand <= 1 && gAimOffsetValid[gevrPhysHand(hand)]) {
+        const float *o = gAimOffset[gevrPhysHand(hand)];
+        off[0] = o[0];
+        off[1] = o[1];
+        off[2] = o[2];
+        off[3] = o[3];
+        return 1;
+    }
+#else
+    (void)hand;
+    (void)off;
+#endif
+    return 0;
 }
 
 /*

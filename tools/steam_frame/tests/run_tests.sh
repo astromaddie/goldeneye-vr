@@ -23,3 +23,8 @@ done
 "$cc" -std=c11 -Wall -Wextra -Werror -I"$root/port/vr" \
     "$here/test_vr_motion.c" "$root/port/vr/vr_motion_math.c" -lm -o "$out/test_vr_motion"
 "$out/test_vr_motion"
+
+# the gun's aim on the Frame (port/vr/vr_aim_math.c), the production functions
+"$cc" -std=c11 -Wall -Wextra -Werror -I"$root/port/vr" \
+    "$here/test_vr_aim.c" "$root/port/vr/vr_aim_math.c" -lm -o "$out/test_vr_aim"
+"$out/test_vr_aim"

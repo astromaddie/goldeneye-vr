@@ -5,6 +5,7 @@
 #include "gevr_surface_probe.h"
 #include "gevr_surface_math.h"
 #include "vr_motion.h"
+#include "vr_aim_math.h"
 #endif
 #include <ultra64.h>
 #ifdef GEVR
@@ -238,6 +239,7 @@ extern void gevrVrHeadPosCm(float out[3]);   /* vr_openxr.cpp */
 extern int gevrVrGripPose(int hand, float pos[3], float quat[4]); /* vr_input.cpp */
 /* the same, as it was when this frame's camera pose was taken */
 extern int gevrVrGripPoseCamera(int hand, float pos[3], float quat[4]);
+extern int gevrVrAimOffset(int hand, float off[4]);   /* vr_input.cpp: the Frame's grip-to-aim turn (vr_aim_math.h) */
 extern unsigned gevrVrGripSnapshotId(void);
 extern int gevrVrGripTracked(int hand);
 extern float VrGunOffX, VrGunOffY, VrGunOffZ;   /* goldeneye-vr.ini grip trim, cm */
@@ -998,10 +1000,18 @@ static f32 s_gevrTwoHandAmt;   /* issue #35: the two-handed hold, eased 0..1 (ge
 static void gevrTwoHandAim(const f32 pos[3], f32 right[3], f32 up[3], f32 back[3]);
 f32 gevrScopeMagnification(void);
 
-static s32 gevrGripAxesRaw(s32 ctrl, f32 pos[3], f32 right[3], f32 up[3], f32 back[3])
+/*
+ * One controller's axes in view space. gun FALSE: the grip map itself (the
+ * watch arm, the watch laser, melee, throwing). gun TRUE: the gun's - on the
+ * Steam Frame the grip turned by the controller's grip-to-aim offset
+ * (vr_aim_math.h, vr_input.cpp gevrVrAimOffset), so the barrel is the aim
+ * pose's pointing ray; elsewhere, and until that offset is known, the grip.
+ * The gun turns about the controller (the hand), and the fit trim (VrGunOff,
+ * gevrStereoGunMatrix) turns with it, so the gun keeps its place in the hand.
+ */
+static s32 gevrHandAxes(s32 ctrl, s32 gun, f32 pos[3], f32 right[3], f32 up[3], f32 back[3])
 {
-    f32 q[4];
-    f32 x, y, z, w;
+    f32 q[4], off[4], g[4];
     s32 i;
 
     if (!gevrVrGripPoseCamera(ctrl, pos, q))
@@ -1009,22 +1019,20 @@ static s32 gevrGripAxesRaw(s32 ctrl, f32 pos[3], f32 right[3], f32 up[3], f32 ba
         return FALSE;
     }
 
-    x = q[0]; y = q[1]; z = q[2]; w = q[3];
-
     /*
      * The holder's right, up and back in view space: grip +X, -Z and +Y
      * (columns of the rotation matrix). Measured on the headset: the barrel
      * is the grip's -Y and +X is the holder's right for either hand.
      */
-    right[0] = 1.0f - 2.0f * (y * y + z * z);
-    right[1] = 2.0f * (x * y + w * z);
-    right[2] = 2.0f * (x * z - w * y);
-    up[0] = -(2.0f * (x * z + w * y));
-    up[1] = -(2.0f * (y * z - w * x));
-    up[2] = -(1.0f - 2.0f * (x * x + y * y));
-    back[0] = 2.0f * (x * y - w * z);
-    back[1] = 1.0f - 2.0f * (x * x + z * z);
-    back[2] = 2.0f * (y * z + w * x);
+    if (gun && gevrVrAimOffset(ctrl, off))
+    {
+        gevrGunQuat(q, off, g);
+        gevrGripAxesFromQuat(g, right, up, back);
+    }
+    else
+    {
+        gevrGripAxesFromQuat(q, right, up, back);
+    }
 
     for (i = 0; i < 3; i++)
     {
@@ -1034,6 +1042,11 @@ static s32 gevrGripAxesRaw(s32 ctrl, f32 pos[3], f32 right[3], f32 up[3], f32 ba
     return TRUE;
 }
 
+static s32 gevrGripAxesRaw(s32 ctrl, f32 pos[3], f32 right[3], f32 up[3], f32 back[3])
+{
+    return gevrHandAxes(ctrl, FALSE, pos, right, up, back);
+}
+
 /* Every user of the gun hand's axes comes through here - the gun, its shots,
  * sight, muzzle and scope - so the two-handed aim (issue #35) turns them all,
  * as Perfect Dark VR's vrBuildGunRotation is the one writer of the gun's
@@ -1041,6 +1054,22 @@ static s32 gevrGripAxesRaw(s32 ctrl, f32 pos[3], f32 right[3], f32 up[3], f32 ba
 static s32 gevrGripAxes(s32 ctrl, f32 pos[3], f32 right[3], f32 up[3], f32 back[3])
 {
     if (!gevrGripAxesRaw(ctrl, pos, right, up, back))
+    {
+        return FALSE;
+    }
+    if (ctrl == 1 && s_gevrTwoHandAmt > 0.001f)
+    {
+        gevrTwoHandAim(pos, right, up, back);
+    }
+    return TRUE;
+}
+
+/* The same for the gun itself - its model, shots, crosshair, scope and the
+ * two-handed hold - with the gun's axes (gevrHandAxes): on the Steam Frame the
+ * barrel is the aim pose's ray. The watch keeps gevrGripAxes. */
+static s32 gevrGunAxes(s32 ctrl, f32 pos[3], f32 right[3], f32 up[3], f32 back[3])
+{
+    if (!gevrHandAxes(ctrl, TRUE, pos, right, up, back))
     {
         return FALSE;
     }
@@ -1261,7 +1290,7 @@ s32 gevrStereoGunMatrix(s32 handnum, Mtxf *out)
 
     {
         static s32 had[2] = { -1, -1 };
-        s32 have = gevrGripAxes(ctrl, pos, right, up, back);
+        s32 have = gevrGunAxes(ctrl, pos, right, up, back);
 
         if (have != had[handnum])
         {
@@ -2039,7 +2068,7 @@ static s32 gevrTwoHandBarrel(f32 opos[3], f32 snap[3], f32 *distcm, s32 drawn)
     f32 t, tmin, tmax, d[3];
     s32 i;
 
-    if (cm < 1e-6f || !gevrGripAxes(1, gpos, right, up, back) || !gevrGripAxesRaw(0, opos, ignore, ignore, ignore))
+    if (cm < 1e-6f || !gevrGunAxes(1, gpos, right, up, back) || !gevrGripAxesRaw(0, opos, ignore, ignore, ignore))
     {
         return FALSE;
     }
@@ -2989,7 +3018,7 @@ s32 gevrStereoTwoHandMatrix(Mtxf *m)
         }
     }
 
-    if (!gevrStereoTwoHandGrip() || !gevrTwoHandBarrel(opos, snap, &dist, TRUE) || !gevrGripAxes(1, gpos, right, up, back))
+    if (!gevrStereoTwoHandGrip() || !gevrTwoHandBarrel(opos, snap, &dist, TRUE) || !gevrGunAxes(1, gpos, right, up, back))
     {
         return FALSE;
     }
@@ -3510,7 +3539,10 @@ s32 gevrStereoShot(s32 handnum, coord2d *spreadpos, struct coord3d *origin, stru
 
     ctrl = gevrShotCtrl(handnum);
 
-    if (!g_gevrStereo || (handnum != GUNRIGHT && handnum != GUNLEFT) || !gevrGripAxes(ctrl, pos, right, up, back))
+    /* the watch (GUNRIGHT from controller 0, issue #31) keeps the grip's axes */
+    if (!g_gevrStereo || (handnum != GUNRIGHT && handnum != GUNLEFT)
+        || !(handnum == GUNRIGHT && ctrl == 0 ? gevrGripAxes(ctrl, pos, right, up, back)
+                                              : gevrGunAxes(ctrl, pos, right, up, back)))
     {
         return FALSE;
     }
@@ -3573,7 +3605,7 @@ s32 gevrStereoAimTarget(struct coord3d *target)
     f32 pos[3], right[3], up[3], back[3];
     s32 ctrl = gevrShotCtrl(GUNRIGHT);
 
-    if (!g_gevrStereo || !gevrGripAxes(ctrl, pos, right, up, back))
+    if (!g_gevrStereo || !(ctrl == 0 ? gevrGripAxes(ctrl, pos, right, up, back) : gevrGunAxes(ctrl, pos, right, up, back)))
     {
         return FALSE;
     }
@@ -3895,7 +3927,7 @@ static s32 gevrScopeBeginHand(s32 hand)
     st->gunValid = FALSE;
     if (g_gevrStereo && g_CurrentPlayer != NULL && !gevrVrScreenMode && g_PlayerIsInTank != 1
         && sc != NULL
-        && vu > 1e-6f && gevrGripAxes(ctrl, pos, right, up, back) && gevrStereoShot(hand, NULL, &o, &d))
+        && vu > 1e-6f && gevrGunAxes(ctrl, pos, right, up, back) && gevrStereoShot(hand, NULL, &o, &d))
     {
         gevrScopeTune();
         gevrScopeLensPlace(sc, st->lens);
@@ -12768,8 +12800,17 @@ Gfx *bondviewRenderDebugBondView(Gfx *gdl)
 
         if (gevrVrGripPosePlay(1, p, q))
         {
-            /* the barrel is the grip's -Y (gevrGripAxes): its height is -(1 - 2(x^2 + z^2)) */
-            f32 barrely = -(1.0f - 2.0f * (q[0] * q[0] + q[2] * q[2]));
+            /* the barrel is the gun's -back (gevrGunAxes: on the Frame the grip turned
+             * to the aim pose): its height is -(1 - 2(x^2 + z^2)) */
+            f32 off[4], g[4];
+            f32 barrely;
+
+            if (gevrVrAimOffset(1, off))
+            {
+                gevrGunQuat(q, off, g);
+                q[0] = g[0]; q[1] = g[1]; q[2] = g[2]; q[3] = g[3];
+            }
+            barrely = -(1.0f - 2.0f * (q[0] * q[0] + q[2] * q[2]));
 
             if (barrely > 1.0f) barrely = 1.0f;
             if (barrely < -1.0f) barrely = -1.0f;

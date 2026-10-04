@@ -74,6 +74,7 @@
 #include "vr_log.h"
 #include "vr_hub.h"
 #include "vr_screen.h"
+#include "vr_aim_math.h"
 
 extern "C" struct GfxRenderingAPI* gfx_get_current_rendering_api(void);
 
@@ -292,8 +293,9 @@ static void vr_finish_app(const char *why)
     _exit(0);
 }
 
-// "Quit to Steam" (the launcher, the menu-hold prompt): ask the runtime to end the session, as
-// the standard wants; the app goes when it says EXITING, or after 3 s if it never does.
+// Quit: ask the runtime to end the session; the app goes when it says EXITING, or after 3 s if it
+// never does. No menu offers it (standard.md section 1: SteamVR's own menu quits applications);
+// the unattended diagnostics' exit_after_s (vr_diag.c) use it.
 static double g_quitRequestMs = 0.0;
 extern "C" void gevrQuitToSteam(void)
 {
@@ -1997,8 +1999,10 @@ extern "C" void vr_screen_resize(float dist, float fov)
 /*
  * Laser pointer: where a controller points on the virtual screen, as 0..1
  * across (u, left to right) and down (v, top to bottom), or false when it
- * points past it or the screen is not up. The pointing direction is the gun's
- * barrel (the grip's -Y, bondview2.c gevrGripAxes). Flat screens take a
+ * points past it or the screen is not up. The pointing direction is
+ * vr_input.cpp gevrVrPointerRayPlay's: on the Steam Frame the aim pose's -Z
+ * (the gun's barrel follows it too, bondview2.c gevrGunAxes), elsewhere the
+ * grip's -Y as the Quest build tuned it. Flat screens take a
  * ray-plane hit, curved ones a ray-cylinder hit from inside. `o` is the
  * controller position (play space).
  */
@@ -2498,6 +2502,7 @@ static bool vr_screen_present_common(unsigned int srcArrayTex, bool is2d, int w,
 
 extern "C" void vr_screen_set_visible(int visible) { g_screenVisible = visible != 0; }
 extern "C" int gevrVrGripPose(int hand, float pos[3], float quat[4]); // vr_input.cpp
+extern "C" int gevrVrAimOffset(int hand, float off[4]);               // vr_input.cpp: the Frame's gun aim
 extern "C" bool gfx_vr_menu_R_bbox(float out[4]);                     // gfx_opengl.cpp
 
 // The game sampled the head for this frame's camera (bondview2.c gevrStereoFrame).
@@ -3500,7 +3505,8 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
     // --- The sniper scope's lens (issue #40): on the gun, to both eyes ---
     // Placed from the gun hand's newest pose (view space), at the lens's
     // offset from the grip along the gun's up/back/right (bondview2.c
-    // gevrGripAxes: right grip +X, up -Z, back +Y), facing back along the gun
+    // gevrGunAxes: right grip +X, up -Z, back +Y, on the Frame turned to the
+    // aim pose), facing back along the gun
     // so it turns with it. Both eyes see it, as a screen on the scope's back
     // at its own depth: shown to the aiming eye only, the two eyes disagreed
     // and it looked wrong with both open (user).
@@ -3528,10 +3534,18 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
                 ux = sc.gunAxes[1][0]; uy = sc.gunAxes[1][1]; uz = sc.gunAxes[1][2];
                 bx = sc.gunAxes[2][0]; by = sc.gunAxes[2][1]; bz = sc.gunAxes[2][2];
             } else {
-                const float x = gq[0], y = gq[1], z = gq[2], w = gq[3];
-                rx = 1.0f - 2.0f * (y * y + z * z); ry = 2.0f * (x * y + w * z); rz = 2.0f * (x * z - w * y);
-                ux = -(2.0f * (x * z + w * y));     uy = -(2.0f * (y * z - w * x)); uz = -(1.0f - 2.0f * (x * x + y * y));
-                bx = 2.0f * (x * y - w * z);         by = 1.0f - 2.0f * (x * x + z * z); bz = 2.0f * (y * z + w * x);
+                // the gun's axes as bondview2.c gevrGunAxes builds them: on the Frame the grip
+                // turned to the aim pose (vr_aim_math.h), so the lens sits on the gun as drawn
+                float off[4], g[4], r3[3], u3[3], b3[3];
+                if (gevrVrAimOffset(ctrl, off)) {
+                    gevrGunQuat(gq, off, g);
+                } else {
+                    memcpy(g, gq, sizeof(g));
+                }
+                gevrGripAxesFromQuat(g, r3, u3, b3);
+                rx = r3[0]; ry = r3[1]; rz = r3[2];
+                ux = u3[0]; uy = u3[1]; uz = u3[2];
+                bx = b3[0]; by = b3[1]; bz = b3[2];
             }
             // bondview2.c gevrScopeLensPlace: on the model's eyepiece, mirrored with the gun
             const float side = sc.lens[0], up = sc.lens[1], back = sc.lens[2];
