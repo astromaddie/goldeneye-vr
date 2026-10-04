@@ -18,22 +18,25 @@ XrResult trigger_haptic_vibration_c(int hand_index, float amplitude, float durat
 void vr_screen_recenter(void);                                 /* vr_openxr.cpp */
 void gevrRequestRecenter(int flags);                           /* port/src/input.c */
 int gevrVrFloorRelative(void);                                 /* vr_openxr.cpp */
+int gevrVrSettingsOpen(const char *why);                       /* vr_launcher.cpp: 0 = not in a game */
 }
 
 static sfvr_view_button s_view;
-static double s_backUntilMs;
+static double s_backUntilS;
 static unsigned long s_events;
+
+/* Menu + View (vr_system.h) */
+static bool s_chordLatched;   // both have been down together in this press; until both are up
+static bool s_chordBothWas;
+static bool s_chordFired;
+static double s_chordStartS;
+static double s_chordEndS = -1.0e9;
 
 static double nowS()
 {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (double)ts.tv_sec + (double)ts.tv_nsec / 1.0e9;
-}
-
-unsigned vrSystemViewStep(int pressed, double now_s)
-{
-    return sfvr_view_update(&s_view, nullptr, pressed, now_s);
 }
 
 static void buzzBoth()
@@ -51,16 +54,48 @@ static void recentre(int flags, bool buzz, const char *why)
     SLOG("[vr-sys] recentre%s (%s)", flags >= 2 ? " + standing height" : "", why);
 }
 
-extern "C" void vrSystemFrame(int focused)
+static void chordReset()
 {
-    if (!gevrVrFrameProfile() || !focused) {
-        sfvr_view_reset(&s_view);   /* focus lost or another profile: cancel without events */
-        return;
+    s_chordLatched = s_chordBothWas = s_chordFired = false;
+}
+
+unsigned vrSystemStep(int view, int menu, double now_s)
+{
+    unsigned ev = 0;
+    view = view != 0;
+    menu = menu != 0;
+
+    /* Menu + View: latched while both take part, so neither press does its own job */
+    const bool both = view && menu;
+    if (both && !s_chordLatched) {
+        s_chordLatched = true;
+        s_chordFired = false;
+        SLOG("[vr-sys] Menu + View: held together");
     }
-    const unsigned ev = vrSystemViewStep(get_button_state(0, "view") ? 1 : 0, nowS());
+    if (both && !s_chordBothWas) {
+        s_chordStartS = now_s;   /* 0.5 s of both held together, without a gap */
+    }
+    s_chordBothWas = both;
+    if (both && !s_chordFired && now_s - s_chordStartS >= VR_SYSTEM_CHORD_HOLD_S) {
+        s_chordFired = true;
+        ev |= VR_SYSTEM_SETTINGS;
+    }
+    if (s_chordLatched) {
+        /* this View press is the chord's: no back, no recentre; one still down after it is ignored
+         * until it is let go (sfvr_view_reset's rule for a press it did not see start) */
+        sfvr_view_reset(&s_view);
+        sfvr_view_update(&s_view, nullptr, view, now_s);
+        if (!view && !menu) {
+            s_chordLatched = false;
+            s_chordEndS = now_s;
+        }
+    } else {
+        ev |= sfvr_view_update(&s_view, nullptr, view, now_s);
+    }
+
     s_events += ev != 0;
     if (ev & SFVR_VIEW_SHORT_PRESS) {
-        s_backUntilMs = nowS() * 1000.0 + 150.0;
+        s_backUntilS = now_s + 0.150;
         SLOG("[vr-sys] View short press -> back");
     }
     if (ev & SFVR_VIEW_RECENTRE) {
@@ -69,6 +104,44 @@ extern "C" void vrSystemFrame(int focused)
     if (ev & SFVR_VIEW_RECALIBRATE_HEIGHT) {
         recentre(2, true, "View held 3 s");
     }
+    if (ev & VR_SYSTEM_SETTINGS) {
+        if (gevrVrSettingsOpen("Menu + View")) {
+            /* standard.md section 6, `ui_click`: 0.5 for 30 ms (both hands: both are on the chord) */
+            trigger_haptic_vibration_c(0, 0.5f, 0.03f);
+            trigger_haptic_vibration_c(1, 0.5f, 0.03f);
+            SLOG("[vr-sys] Menu + View held 0.5 s -> VR settings");
+        } else {
+            SLOG("[vr-sys] Menu + View held 0.5 s: no VR settings here (the launcher has them)");
+        }
+    }
+    return ev;
+}
+
+unsigned vrSystemViewStep(int pressed, double now_s)
+{
+    return vrSystemStep(pressed, 0, now_s);
+}
+
+int vrSystemBackAt(double now_s)
+{
+    return now_s < s_backUntilS ? 1 : 0;
+}
+
+int vrSystemMenuChordAt(double now_s)
+{
+    /* a moment after both are up: input.c reads Menu once a game frame, after this has seen it */
+    return s_chordLatched || now_s - s_chordEndS < 0.25 ? 1 : 0;
+}
+
+extern "C" void vrSystemFrame(int focused)
+{
+    if (!gevrVrFrameProfile() || !focused) {
+        sfvr_view_reset(&s_view);   /* focus lost or another profile: cancel without events */
+        if (s_chordLatched) s_chordEndS = nowS();
+        chordReset();
+        return;
+    }
+    vrSystemStep(get_button_state(0, "view") ? 1 : 0, get_button_state(0, "menu") ? 1 : 0, nowS());
 }
 
 extern "C" void vrSystemRuntimeRecentre(void)
@@ -80,7 +153,12 @@ extern "C" void vrSystemRuntimeRecentre(void)
 
 extern "C" int gevrSystemBack(void)
 {
-    return nowS() * 1000.0 < s_backUntilMs ? 1 : 0;
+    return vrSystemBackAt(nowS());
+}
+
+extern "C" int gevrSystemMenuChord(void)
+{
+    return vrSystemMenuChordAt(nowS());
 }
 
 #endif /* GEVR_STEAM_FRAME */

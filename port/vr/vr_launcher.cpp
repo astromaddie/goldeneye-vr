@@ -52,7 +52,6 @@
 #include "vr_diag.h"
 #ifdef GEVR_STEAM_FRAME
 extern "C" int gevrSystemBack(void);   // vr_system.cpp: a short View press
-extern "C" void gevrQuitToSteam(void); // vr_openxr.cpp
 #endif
 
 extern "C" {
@@ -64,6 +63,8 @@ void vrSettingsSave(void);            // vr_settings.cpp
 void vrEnsurePlayerName(void);        // vr_settings.cpp: make up a name if there is none
 extern char g_ActiveExtTexPack[];     // port/src/ext_tex.c: the texture pack in use ("" = none), saved in the ini
 void gevrTexpackStartEarly(void);     // fast3d/gfx_pc.cpp: index that pack in the background
+int gevrTexpackState(void);           // fast3d/gfx_pc.cpp: 1 on, 0 off (for this session), -1 no pack
+int gevrTexpackToggle(void);          // fast3d/gfx_pc.cpp: switch it, returns the new state
 void vr_apply_refresh_rate(void);     // vr_openxr.cpp
 int gevrVrSessionRunning(void);       // vr_openxr.cpp: includes the unfocused Quest menu
 extern int selected_num_players;      // src/game/front.c
@@ -261,8 +262,19 @@ void pollInjected(Injected &in)
 // chosen file to data/picked.z64, which scan() checks and adopts.
 // Issue #16: back to the launcher from a level (port/src/input.c menu hold).
 // The launcher runs before the ROM loads, so the app restarts into it.
+#ifdef GEVR_STEAM_FRAME
+extern "C" void gevrFrameBackToTitle(const char *notice);   // below
+#endif
 extern "C" void gevrRestartToLauncher(void)
 {
+#ifdef GEVR_STEAM_FRAME
+    // Never on the Frame: the app was started by Steam and the restart only ends it. Every caller
+    // there goes to gevrFrameBackToTitle with its own note; this is the catch-all.
+    gevrFrameBackToTitle("Back to the title screen.\n\n"
+        "The launcher (ROM, mods, multiplayer) opens as GoldenEye VR starts. To see it again, quit "
+        "from the SteamVR menu and start GoldenEye VR again.");
+    return;
+#endif
     JNIEnv *env = (JNIEnv *)SDL_AndroidGetJNIEnv();
     jobject activity = (jobject)SDL_AndroidGetActivity();
     if (env == nullptr || activity == nullptr) {
@@ -1955,14 +1967,19 @@ bool feedPointer(ImGuiIO &io, bool navUsed) {
 // The test hook's START (1000) presses the launcher's Start directly.
 bool s_injectStart = false;
 
-bool feedGamepad(ImGuiIO &io) {
-    static Injected inj;
-    pollInjected(inj);
-    if (inj.mask & 0x1000) {
+// In game (the VR settings, `overlay`): the test hook's buttons come from the game's own poll
+// (port/src/libultra.c), and there is no Start to press and no file picker.
+bool feedGamepad(ImGuiIO &io, const Injected *overlay = nullptr, bool *backOut = nullptr) {
+    static Injected launcherInj;
+    if (!overlay) {
+        pollInjected(launcherInj);
+    }
+    const Injected &inj = overlay ? *overlay : launcherInj;
+    if (!overlay && (inj.mask & 0x1000)) {
         s_injectStart = true;
     }
 #ifdef GEVR_STEAM_FRAME
-    {
+    if (!overlay) {
         // vr-diag.ini autostart: Start after a couple of seconds of launcher frames, once
         static int frames = 0;
         if (gevrDiag()->autostart && ++frames == 150) {
@@ -1972,7 +1989,7 @@ bool feedGamepad(ImGuiIO &io) {
     }
 #endif
     static bool pickerHookDone = false;
-    if ((inj.mask & 0x0020) && !pickerHookDone) { // test hook: L opens the file picker
+    if (!overlay && (inj.mask & 0x0020) && !pickerHookDone) { // test hook: L opens the file picker
         pickerHookDone = true;
         gevrOpenRomPicker();
     }
@@ -1999,6 +2016,7 @@ bool feedGamepad(ImGuiIO &io) {
     const bool viewBack = false;
 #endif
     const bool back = get_button_state(1, "b") || get_button_state(0, "y") || viewBack || (inj.mask & 0x4000);
+    if (backOut) *backOut = back;
     const bool select = get_button_state(1, "a") || get_button_state(0, "x") || (inj.mask & 0x8000);
     const bool navUsed = fabsf(s.x) > t || fabsf(s.y) > t || back || select;
     const bool pointing = feedPointer(io, navUsed);
@@ -2074,6 +2092,431 @@ void showKeyboard(const ImGuiIO &io)
 
 }  // namespace
 
+// --- The launcher's pages, shared with the in-game VR settings (gevrVrSettingsOverlayDraw) ---
+
+// Movement comfort: comfort locomotion (port/vr/vr_motion.h); each switch can be put back.
+static void gevrMovementPage(bool &open, const ImVec4 &gold)
+{
+    ImGui::TextColored(gold, "MOVEMENT COMFORT (stereo)");
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("For walking with the stick. Your own head and hands are never delayed or smoothed.");
+    ImGui::PopStyleColor();
+    ImGui::Spacing();
+
+    bool even = VrEvenMovement != 0;
+    if (ImGui::Checkbox("Even movement", &even)) {
+        VrEvenMovement = even ? 1 : 0;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Walking and smooth turning shown at the headset's full rate, at a steady speed\n"
+                          "(no surge with each step, no run boost after 3 seconds). Off: as the game does it.");
+    }
+    bool stairs = VrSmoothStairs != 0;
+    if (ImGui::Checkbox("Smooth stairs", &stairs)) {
+        VrSmoothStairs = stairs ? 1 : 0;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("The view glides up and down steps and slopes, and does not dip when you land.\n"
+                          "Real drops still follow at once.");
+    }
+
+    ImGui::Spacing();
+    ImGui::TextColored(gold, "EXPERIMENTAL: WALKING SWAY");
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.70f);
+    float swayPct = VrSwayStrength * 100.0f;
+    if (ImGui::SliderFloat("##SwayStrength", &swayPct, 0.0f, 100.0f, swayPct < 0.5f ? "Off" : "Sway %.0f%%")) {
+        VrSwayStrength = swayPct < 0.5f ? 0.0f : swayPct / 100.0f;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("A slight side-to-side sway as you walk, and a small bob on stairs.\n"
+                          "An experiment: try it against Off and say which feels better.");
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    if (ImGui::Button("Reset to Defaults##movement")) {
+#ifdef GEVR_STEAM_FRAME
+        VrEvenMovement = 1;
+        VrSmoothStairs = 1;
+#else
+        VrEvenMovement = 0;
+        VrSmoothStairs = 0;
+#endif
+        VrSwayStrength = 0.0f;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Done##movement", ImVec2(-1, 0))) {
+        open = false;
+    }
+}
+
+static void gevrThrowingPage(bool &open, const ImVec4 &gold)
+{
+    ImGui::TextColored(gold, "MOTION THROWING SETTINGS");
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("Hold Grip on throwables (grenades, knives, mines), swing arm, and release Grip to throw.\n"
+                       "Grip + Trigger cooks grenades. Releases instantly at 90%% grip squeeze.");
+    ImGui::PopStyleColor();
+    ImGui::Spacing();
+
+    bool motionThrow = VrMotionThrowing;
+    if (ImGui::Checkbox("Enable motion throwing", &motionThrow)) {
+        VrMotionThrowing = motionThrow;
+    }
+
+    ImGui::BeginDisabled(!VrMotionThrowing);
+
+    ImGui::Spacing();
+    ImGui::TextColored(gold, "THROW STRENGTH & VELOCITY");
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.70f);
+    ImGui::SliderFloat("##ThrowStrength", &VrMotionThrowStrength, 0.5f, 2.0f, "Strength %.2fx");
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Scales throw speed with physical swing speed.\n1.0x = natural realism, higher = longer throws.");
+    }
+
+    ImGui::Spacing();
+    ImGui::TextColored(gold, "TRAJECTORY CALIBRATION");
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.70f);
+    ImGui::SliderFloat("##ThrowPitch", &VrMotionThrowPitch, -20.0f, 20.0f, "Pitch %+.0f°");
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Vertical pitch trim: adjust upward (+) or downward (-) if throws fly too low/high.");
+    }
+
+    ImGui::Spacing();
+    ImGui::TextColored(gold, "GAZE ASSIST (overhand throws)");
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.70f);
+    float gazePct = VrMotionThrowGazeAssist * 100.0f;
+    if (ImGui::SliderFloat("##ThrowGaze", &gazePct, 0.0f, 100.0f, "Gaze %.0f%%")) {
+        VrMotionThrowGazeAssist = gazePct / 100.0f;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Blends overhand throw direction toward where you are looking (0%% = pure hand, 100%% = max gaze pull).\n"
+                          "Underhand rolls, bowling, and throws behind your back remain 100%% pure hand physics.");
+    }
+
+    ImGui::EndDisabled();
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    if (ImGui::Button("Reset to Defaults")) {
+        VrMotionThrowing = true;
+        VrMotionThrowStrength = 1.0f;
+        VrMotionThrowPitch = 0.0f;
+        VrMotionThrowGazeAssist = 0.50f;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Done", ImVec2(-1, 0))) {
+        open = false;
+    }
+}
+
+// GoldenEye cheats (issue #1's idea: the tiny guns as a cheat): ticked cheats are switched on as
+// each mission starts, the way the game's own cheat menu does (front.c init_menu0B_runstage).
+static void gevrCheatPage(bool &open, const ImVec4 &gold)
+{
+    struct CheatRow { const char *name; int id; bool cosmetic; };
+    static const CheatRow fun[] = {
+        { "DK mode (big heads)", 12, true }, { "Paintball mode", 15, true }, { "Line mode", 7, true },
+        { "Tiny Bond", 14, false }, { "Turbo mode", 24, false }, { "Invisibility", 10, false },
+        { "Fast animation", 26, false }, { "Slow animation", 27, false }, { "Enemy rockets", 28, false },
+    };
+    static const CheatRow arms[] = {
+        { "Invincibility", 2, false }, { "All guns", 3, false }, { "Infinite ammo", 11, false },
+        { "Golden Gun", 19, false }, { "Silver PP7", 20, false }, { "Gold PP7", 21, false },
+        { "Magnum", 17, false }, { "Laser", 18, false }, { "2x Rocket launcher", 29, false },
+        { "2x Grenade launcher", 30, false }, { "2x RC-P90", 31, false }, { "2x Throwing knife", 32, false },
+        { "2x Hunting knife", 33, false }, { "2x Laser", 34, false },
+    };
+    auto row = [](const CheatRow& c) {
+        bool on = (VrCheatMask >> c.id) & 1ULL;
+        char label[64];
+        snprintf(label, sizeof(label), "%s%s", c.name, c.cosmetic ? "" : " *");
+        if (ImGui::Checkbox(label, &on)) {
+            if (on) VrCheatMask |= 1ULL << c.id;
+            else VrCheatMask &= ~(1ULL << c.id);
+        }
+    };
+    ImGui::TextColored(gold, "CHEATS");
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("On from the next mission. * stops missions saving, as in the original game.");
+    ImGui::PopStyleColor();
+    if (ImGui::BeginTable("cheats", 3, ImGuiTableFlags_SizingStretchSame)) {
+        ImGui::TableNextColumn();
+        ImGui::TextColored(gold, "VR");
+        ImGui::RadioButton("Normal guns", &VrGunSizeCheat, 0);
+        ImGui::RadioButton("Tiny guns", &VrGunSizeCheat, 1);
+        ImGui::RadioButton("Big guns", &VrGunSizeCheat, 2);
+        // three even columns: the launcher page does not scroll
+        ImGui::TextColored(gold, "FUN");
+        for (int i = 0; i < 5; i++) row(fun[i]);
+        ImGui::TableNextColumn();
+        for (int i = 5; i < 9; i++) row(fun[i]);
+        ImGui::TextColored(gold, "WEAPONS");
+        for (int i = 0; i < 5; i++) row(arms[i]);
+        ImGui::TableNextColumn();
+        for (int i = 5; i < (int)(sizeof(arms) / sizeof(arms[0])); i++) row(arms[i]);
+        ImGui::EndTable();
+    }
+    if (ImGui::Button("All off")) {
+        VrCheatMask = 0;
+        VrGunSizeCheat = 0;
+    }
+    ImGui::SameLine();
+    // Issue #54, as gepc-ref D257 Game.AllUnlocked: the game's own mission
+    // select and Cheat Options, fully open (port/src/main.c, front.c).
+    // Nothing is written to the saves.
+    {
+        bool unlock = VrUnlockAll != 0;
+        if (ImGui::Checkbox("Unlock all missions and cheats", &unlock)) {
+            VrUnlockAll = unlock ? 1 : 0;
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Every mission at every difficulty, 007 mode, and every cheat\n"
+                              "in the game's own Cheat Options. Your save files are left as\n"
+                              "they are; missions you finish still count as usual.");
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Done", ImVec2(-1, 0))) {
+        open = false;
+    }
+}
+
+// Both grips: the screen is in your hands, as in game (port/src/input.c): it follows them, and
+// the right stick moves it nearer/farther (up/down) and makes it bigger/smaller (left/right).
+// The launcher and the in-game VR settings; returns whether it is held.
+static bool gevrScreenGrabStep(float deltaTime)
+{
+    const bool grabbing = get_button_state(0, "grip") && get_button_state(1, "grip");
+    vr_screen_grab(grabbing ? 1 : 0);
+    if (grabbing) {
+        XrVector2f r = {0, 0};
+        get_2d_input(1, "thumbstick", &r);
+        const float dt = deltaTime > 0.1f ? 0.1f : deltaTime;
+        const float dy = fabsf(r.y) > 0.2f ? r.y : 0.0f;
+        const float dx = fabsf(r.x) > 0.2f ? r.x : 0.0f;
+        if (dy != 0.0f || dx != 0.0f) {
+            const float width = 2.0f * VrScreenDistance * tanf(VrScreenFov * 0.5f * 3.14159265f / 180.0f);
+            float dist = VrScreenDistance + dy * 1.5f * dt;
+            if (dist < VR_SCREEN_DISTANCE_MIN) dist = VR_SCREEN_DISTANCE_MIN;
+            if (dist > VR_SCREEN_DISTANCE_MAX) dist = VR_SCREEN_DISTANCE_MAX;
+            float fov = 2.0f * (float)atan((double)(width / (2.0f * dist))) * 180.0f / 3.14159265f;
+            fov += dx * 25.0f * dt;
+            if (fov < VR_SCREEN_FOV_MIN) fov = VR_SCREEN_FOV_MIN;
+            if (fov > VR_SCREEN_FOV_MAX) fov = VR_SCREEN_FOV_MAX;
+            vr_screen_resize(dist, fov);
+        }
+    }
+    return grabbing;
+}
+
+// The turning and vignette choices: the launcher keeps them as its own and writes them back when
+// the game starts; the in-game VR settings write them back every frame (gevrComfortApply).
+struct GevrComfortChoice {
+    int turn = 0;              // smooth, snap 30, 45, 90
+    bool vignetteOn = false;
+    float vignette = 0.5f;
+};
+
+static GevrComfortChoice gevrComfortRead()
+{
+    GevrComfortChoice c;
+    c.turn = VrUseSnapTurn >= 80.0f ? 3 : VrUseSnapTurn >= 40.0f ? 2 : VrUseSnapTurn > 0.0f ? 1 : 0;
+    c.vignetteOn = VrComfortVignette > 0.0f;
+    if (c.vignetteOn) c.vignette = VrComfortVignette;
+    return c;
+}
+
+static void gevrComfortApply(const GevrComfortChoice &c)
+{
+    static const float snaps[] = {0.0f, 30.0f, 45.0f, 90.0f};
+    VrUseSnapTurn = snaps[c.turn < 0 ? 0 : c.turn > 3 ? 3 : c.turn];
+    VrComfortVignette = c.vignetteOn ? c.vignette : 0.0f;
+}
+
+// The main page's two columns of options. `mode` is the launcher's stereo/flat choice (nullptr in
+// game: shown, not changeable); `upd` the updater's state (nullptr: no "Offer test builds").
+static void gevrSettingsColumns(bool inGame, int *mode, GevrComfortChoice &comfort, bool &movementPage,
+                                bool &throwingPage, bool &modsPage, UpdateStatus *upd, const ImVec4 &gold)
+{
+    if (ImGui::BeginTable("opts", 2, ImGuiTableFlags_SizingStretchSame)) {
+        ImGui::TableNextColumn();
+        ImGui::TextColored(gold, "DISPLAY");
+        {
+            // In game (no `mode`): the play mode the game started with, which the launcher chooses.
+            int shown = VrPlayMode ? 1 : 0;
+            int *m = mode ? mode : &shown;
+            ImGui::BeginDisabled(mode == nullptr);
+            ImGui::RadioButton("Stereo VR (3D play)", m, 1);
+            ImGui::RadioButton("Flat screen", m, 0);
+            ImGui::EndDisabled();
+            if (mode == nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip("Chosen in the launcher, when GoldenEye VR starts.");
+            }
+        }
+        ImGui::Spacing();
+        ImGui::TextColored(gold, "SCREEN");
+        if (ImGui::IsItemHovered()) {
+#ifdef GEVR_STEAM_FRAME
+            ImGui::SetTooltip("Both grips grab the screen; right stick: distance / size.\n"
+                              "Hold View (left controller) for a second to recentre it.");
+#else
+            ImGui::SetTooltip("Both grips grab the screen; right stick: distance / size.\n"
+                              "Hold the left stick click to recentre it.");
+#endif
+        }
+        {
+            int curved = VrScreenCurved;
+            ImGui::RadioButton("Flat", &curved, 0);
+            ImGui::SameLine();
+            ImGui::BeginDisabled(!vr_screen_curve_supported());
+            ImGui::RadioButton("Curved", &curved, 1);
+            ImGui::EndDisabled();
+            VrScreenCurved = curved;
+            // Live: this page is on the same screen.
+            float size = VrScreenFov, dist = VrScreenDistance;
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.62f);
+            if (ImGui::SliderFloat("Size", &size, VR_SCREEN_FOV_MIN, VR_SCREEN_FOV_MAX, "%.0f deg")) {
+                vr_screen_resize(VrScreenDistance, size);
+            }
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.62f);
+            if (ImGui::SliderFloat("Distance", &dist, VR_SCREEN_DISTANCE_MIN, VR_SCREEN_DISTANCE_MAX, "%.1f m")) {
+                vr_screen_resize(dist, VrScreenFov);
+            }
+        }
+        ImGui::Spacing();
+        ImGui::TextColored(gold, "AIM STEADYING (stereo)");
+        {
+            // Issue #7: smooths hand tremor out of the aim; big moves stay instant.
+            int steady = VrAimSteady < 0 ? 0 : VrAimSteady > 2 ? 2 : VrAimSteady;
+            ImGui::RadioButton("Off##steady", &steady, 0);
+            ImGui::SameLine();
+            ImGui::RadioButton("Low##steady", &steady, 1);
+            ImGui::SameLine();
+            ImGui::RadioButton("High##steady", &steady, 2);
+            VrAimSteady = steady;
+        }
+        ImGui::Spacing();
+        ImGui::TextColored(gold, "DISPLAY RATE");
+        {
+            // 90 Hz by default; 120 shows each 60 Hz game frame exactly
+            // twice (smoothest hands) but works the headset hardest.
+            int hz = VrRefreshRate >= 110 ? 120 : VrRefreshRate > 0 && VrRefreshRate < 81 ? 72 : 90;
+            bool picked = ImGui::RadioButton("72 Hz", &hz, 72);
+            ImGui::SameLine();
+            picked |= ImGui::RadioButton("90 Hz", &hz, 90);
+            ImGui::SameLine();
+            picked |= ImGui::RadioButton("120 Hz", &hz, 120);
+            VrRefreshRate = hz;
+            // in game at once; the launcher asks for it as the game starts
+            if (picked && inGame) vr_apply_refresh_rate();
+        }
+
+        ImGui::TableNextColumn();
+        ImGui::TextColored(gold, "TURNING (stereo)");
+        ImGui::RadioButton("Smooth", &comfort.turn, 0);
+        ImGui::SameLine();
+        ImGui::RadioButton("Snap 30", &comfort.turn, 1);
+        ImGui::RadioButton("Snap 45", &comfort.turn, 2);
+        ImGui::SameLine();
+        ImGui::RadioButton("Snap 90", &comfort.turn, 3);
+        ImGui::Spacing();
+        ImGui::TextColored(gold, "COMFORT (stereo)");
+        // Movement comfort's page, on the heading's line: a small button is no
+        // taller than the text, and the page has no line to spare (below).
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Movement...")) {
+            movementPage = true;
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Even movement, smooth stairs, and the experimental walking sway");
+        }
+        ImGui::Checkbox("Darken edges when moving", &comfort.vignetteOn);
+        ImGui::BeginDisabled(!comfort.vignetteOn);
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.62f);
+        ImGui::SliderFloat("Strength", &comfort.vignette, 0.1f, 1.0f, "%.1f");
+        ImGui::EndDisabled();
+        {
+            char throwLabel[64];
+            snprintf(throwLabel, sizeof(throwLabel), "Motion Throwing%s...", VrMotionThrowing ? "" : " (Off)");
+            if (ImGui::Button(throwLabel)) {
+                throwingPage = true;
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Configure motion throwing, throw strength, pitch trim, and gaze assist");
+            }
+        }
+        {
+            // Issue #6: the gun in the left hand, watch on the right wrist,
+            // move with the right stick. Live: it swaps the pointer hand too.
+            bool lefty = VrLeftHandedMode != 0;
+            if (ImGui::Checkbox("Left-handed", &lefty)) {
+                VrLeftHandedMode = lefty ? 1 : 0;
+            }
+            // Issue #6 (a left-handed player's request): move with the
+            // other stick, its click (crouch) with it. SwapJoysticks, as
+            // PD VR names it, swaps whichever way the hand setting has them.
+            // On this line, and short: the page does not scroll and has no
+            // line to spare (a line of its own grew it about 9 px), and a
+            // column is about 600 px wide at the 2.2x scale - "Move with
+            // left stick" beside "Left-handed" needed 596 and was cut off.
+            ImGui::SameLine();
+            bool swap = VrSwapJoysticks != 0;
+            if (ImGui::Checkbox("Swap sticks", &swap)) {
+                VrSwapJoysticks = swap ? 1 : 0;
+            }
+            // Troubleshooting readout in game: fps, refresh rate, resolution, build.
+            bool stats = VrShowStats != 0;
+            if (ImGui::Checkbox("Show stats", &stats)) {
+                VrShowStats = stats ? 1 : 0;
+            }
+            // Issue #81: in the game, holding aim turns the move stick
+            // into lean (sideways) and duck (down). On this line, as the
+            // page has no line to spare (see Swap sticks above).
+            ImGui::SameLine();
+            bool nolean = VrAimNoLean != 0;
+            if (ImGui::Checkbox("Aim: no lean", &nolean)) {
+                VrAimNoLean = nolean ? 1 : 0;
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Stereo: holding the aim trigger no longer leans or ducks with the move stick,\n"
+                                  "which keeps moving you. Click the left stick to crouch.");
+            }
+            // GitHub pre-releases too (UpdateChecker.java): for trying a
+            // fix before it ships. Saved by the updater, not the ini.
+#ifndef GEVR_STEAM_FRAME   // the Frame build has no GitHub updater
+            if (upd != nullptr) {
+                bool tests = upd->testBuilds;
+                if (ImGui::Checkbox("Offer test builds", &tests)) {
+                    upd->testBuilds = tests;
+                    gevrUpdaterCommand(tests ? "testbuilds:1" : "testbuilds:0");
+                }
+            }
+#endif
+            // Issue #25: texture packs, on their own page. In game the pack is the one the
+            // game started with, but it can be switched off and on again to compare (the
+            // Quest build's menu-hold prompt does that with X).
+            if (!inGame) {
+                if (ImGui::Button(g_ActiveExtTexPack[0] ? "Mods... (HD textures on)" : "Mods...")) {
+                    modsPage = true;
+                }
+            } else if (gevrTexpackState() >= 0) {
+                bool hd = gevrTexpackState() == 1;
+                if (ImGui::Checkbox("HD textures", &hd)) {
+                    vr_log("VR settings: HD textures %s", gevrTexpackToggle() == 1 ? "on" : "off");
+                }
+            }
+        }
+        ImGui::EndTable();
+    }
+}
+
+#ifdef GEVR_STEAM_FRAME
+// The in-game VR settings' share of the launcher (gevrVrSettingsOverlayDraw below).
+static GLuint s_uiTex = 0, s_uiFbo = 0;
+static bool s_gameStarted = false;
+#endif
+
 extern "C" void gevrLauncherRun(void)
 {
     IMGUI_CHECKVERSION();
@@ -2112,6 +2555,14 @@ extern "C" void gevrLauncherRun(void)
     }
 
     GLuint tex = 0, fbo = 0;
+#ifdef GEVR_STEAM_FRAME
+    if (s_uiFbo != 0) {
+        // a second launcher run in one process does not happen, but would reuse them
+        glDeleteFramebuffers(1, &s_uiFbo);
+        glDeleteTextures(1, &s_uiTex);
+        s_uiFbo = s_uiTex = 0;
+    }
+#endif
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_2D, tex);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kTexW, kTexH, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
@@ -2175,9 +2626,8 @@ extern "C" void gevrLauncherRun(void)
     scan();
 
     bool settingsRead = false;
-    int mode = 1, turn = 0;
-    bool vignetteOn = false;
-    float vignette = 0.5f;
+    int mode = 1;
+    GevrComfortChoice comfort;
     bool focusStart = true;
     bool start = false;
     Uint32 last = SDL_GetTicks();
@@ -2196,7 +2646,13 @@ extern "C" void gevrLauncherRun(void)
     // One look at the GitHub releases per launch (the answer arrives in the
     // background; the line under the ROM shows it). Polled a few times a
     // second rather than every frame: it crosses into Java.
+#ifdef GEVR_STEAM_FRAME
+    // The Frame build does not update itself from GitHub (MainActivity: no UpdateChecker), so
+    // there is nothing to ask; the update line stays empty (updaterStatus answers "idle").
+    vr_log("launcher: no update check (Steam Frame)");
+#else
     gevrUpdaterCommand("check");
+#endif
     UpdateStatus upd;
     Uint32 lastUpdPoll = 0;
     static bool reportPage = false;
@@ -2238,9 +2694,7 @@ extern "C" void gevrLauncherRun(void)
         if (!settingsRead) {
             settingsRead = true;
             mode = VrPlayMode ? 1 : 0;
-            turn = VrUseSnapTurn >= 80.0f ? 3 : VrUseSnapTurn >= 40.0f ? 2 : VrUseSnapTurn > 0.0f ? 1 : 0;
-            vignetteOn = VrComfortVignette > 0.0f;
-            if (vignetteOn) vignette = VrComfortVignette;
+            comfort = gevrComfortRead();
         }
 
         Uint32 now = SDL_GetTicks();
@@ -2258,26 +2712,7 @@ extern "C" void gevrLauncherRun(void)
         // Both grips: the screen is in your hands, as in game (port/src/input.c):
         // it follows them, and the right stick moves it nearer/farther
         // (up/down) and makes it bigger/smaller (left/right).
-        const bool grabbing = get_button_state(0, "grip") && get_button_state(1, "grip");
-        vr_screen_grab(grabbing ? 1 : 0);
-        if (grabbing) {
-            XrVector2f r = {0, 0};
-            get_2d_input(1, "thumbstick", &r);
-            const float dt = io.DeltaTime > 0.1f ? 0.1f : io.DeltaTime;
-            const float dy = fabsf(r.y) > 0.2f ? r.y : 0.0f;
-            const float dx = fabsf(r.x) > 0.2f ? r.x : 0.0f;
-            if (dy != 0.0f || dx != 0.0f) {
-                const float width = 2.0f * VrScreenDistance * tanf(VrScreenFov * 0.5f * 3.14159265f / 180.0f);
-                float dist = VrScreenDistance + dy * 1.5f * dt;
-                if (dist < VR_SCREEN_DISTANCE_MIN) dist = VR_SCREEN_DISTANCE_MIN;
-                if (dist > VR_SCREEN_DISTANCE_MAX) dist = VR_SCREEN_DISTANCE_MAX;
-                float fov = 2.0f * (float)atan((double)(width / (2.0f * dist))) * 180.0f / 3.14159265f;
-                fov += dx * 25.0f * dt;
-                if (fov < VR_SCREEN_FOV_MIN) fov = VR_SCREEN_FOV_MIN;
-                if (fov > VR_SCREEN_FOV_MAX) fov = VR_SCREEN_FOV_MAX;
-                vr_screen_resize(dist, fov);
-            }
-        }
+        const bool grabbing = gevrScreenGrabStep(io.DeltaTime);
         {
             // no stick navigation while the stick is resizing the screen
             if (!grabbing) feedGamepad(io);
@@ -2406,331 +2841,14 @@ extern "C" void gevrLauncherRun(void)
         } else if (modsPage) {
             gevrModsPage(modsPage, now, gold, good, bad);
         } else if (movementPage) {
-            // Comfort locomotion (port/vr/vr_motion.h): each switch can be put back.
-            ImGui::TextColored(gold, "MOVEMENT COMFORT (stereo)");
-            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-            ImGui::TextWrapped("For walking with the stick. Your own head and hands are never delayed or smoothed.");
-            ImGui::PopStyleColor();
-            ImGui::Spacing();
-
-            bool even = VrEvenMovement != 0;
-            if (ImGui::Checkbox("Even movement", &even)) {
-                VrEvenMovement = even ? 1 : 0;
-            }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Walking and smooth turning shown at the headset's full rate, at a steady speed\n"
-                                  "(no surge with each step, no run boost after 3 seconds). Off: as the game does it.");
-            }
-            bool stairs = VrSmoothStairs != 0;
-            if (ImGui::Checkbox("Smooth stairs", &stairs)) {
-                VrSmoothStairs = stairs ? 1 : 0;
-            }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("The view glides up and down steps and slopes, and does not dip when you land.\n"
-                                  "Real drops still follow at once.");
-            }
-
-            ImGui::Spacing();
-            ImGui::TextColored(gold, "EXPERIMENTAL: WALKING SWAY");
-            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.70f);
-            float swayPct = VrSwayStrength * 100.0f;
-            if (ImGui::SliderFloat("##SwayStrength", &swayPct, 0.0f, 100.0f, swayPct < 0.5f ? "Off" : "Sway %.0f%%")) {
-                VrSwayStrength = swayPct < 0.5f ? 0.0f : swayPct / 100.0f;
-            }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("A slight side-to-side sway as you walk, and a small bob on stairs.\n"
-                                  "An experiment: try it against Off and say which feels better.");
-            }
-
-            ImGui::Spacing();
-            ImGui::Separator();
-            if (ImGui::Button("Reset to Defaults##movement")) {
-#ifdef GEVR_STEAM_FRAME
-                VrEvenMovement = 1;
-                VrSmoothStairs = 1;
-#else
-                VrEvenMovement = 0;
-                VrSmoothStairs = 0;
-#endif
-                VrSwayStrength = 0.0f;
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Done##movement", ImVec2(-1, 0))) {
-                movementPage = false;
-            }
+            gevrMovementPage(movementPage, gold);
         } else if (throwingPage) {
-            ImGui::TextColored(gold, "MOTION THROWING SETTINGS");
-            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-            ImGui::TextWrapped("Hold Grip on throwables (grenades, knives, mines), swing arm, and release Grip to throw.\n"
-                               "Grip + Trigger cooks grenades. Releases instantly at 90%% grip squeeze.");
-            ImGui::PopStyleColor();
-            ImGui::Spacing();
-
-            bool motionThrow = VrMotionThrowing;
-            if (ImGui::Checkbox("Enable motion throwing", &motionThrow)) {
-                VrMotionThrowing = motionThrow;
-            }
-
-            ImGui::BeginDisabled(!VrMotionThrowing);
-
-            ImGui::Spacing();
-            ImGui::TextColored(gold, "THROW STRENGTH & VELOCITY");
-            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.70f);
-            ImGui::SliderFloat("##ThrowStrength", &VrMotionThrowStrength, 0.5f, 2.0f, "Strength %.2fx");
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Scales throw speed with physical swing speed.\n1.0x = natural realism, higher = longer throws.");
-            }
-
-            ImGui::Spacing();
-            ImGui::TextColored(gold, "TRAJECTORY CALIBRATION");
-            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.70f);
-            ImGui::SliderFloat("##ThrowPitch", &VrMotionThrowPitch, -20.0f, 20.0f, "Pitch %+.0f°");
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Vertical pitch trim: adjust upward (+) or downward (-) if throws fly too low/high.");
-            }
-
-            ImGui::Spacing();
-            ImGui::TextColored(gold, "GAZE ASSIST (overhand throws)");
-            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.70f);
-            float gazePct = VrMotionThrowGazeAssist * 100.0f;
-            if (ImGui::SliderFloat("##ThrowGaze", &gazePct, 0.0f, 100.0f, "Gaze %.0f%%")) {
-                VrMotionThrowGazeAssist = gazePct / 100.0f;
-            }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Blends overhand throw direction toward where you are looking (0%% = pure hand, 100%% = max gaze pull).\n"
-                                  "Underhand rolls, bowling, and throws behind your back remain 100%% pure hand physics.");
-            }
-
-            ImGui::EndDisabled();
-
-            ImGui::Spacing();
-            ImGui::Separator();
-            if (ImGui::Button("Reset to Defaults")) {
-                VrMotionThrowing = true;
-                VrMotionThrowStrength = 1.0f;
-                VrMotionThrowPitch = 0.0f;
-                VrMotionThrowGazeAssist = 0.50f;
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Done", ImVec2(-1, 0))) {
-                throwingPage = false;
-            }
+            gevrThrowingPage(throwingPage, gold);
         } else if (cheatPage) {
-            struct CheatRow { const char *name; int id; bool cosmetic; };
-            static const CheatRow fun[] = {
-                { "DK mode (big heads)", 12, true }, { "Paintball mode", 15, true }, { "Line mode", 7, true },
-                { "Tiny Bond", 14, false }, { "Turbo mode", 24, false }, { "Invisibility", 10, false },
-                { "Fast animation", 26, false }, { "Slow animation", 27, false }, { "Enemy rockets", 28, false },
-            };
-            static const CheatRow arms[] = {
-                { "Invincibility", 2, false }, { "All guns", 3, false }, { "Infinite ammo", 11, false },
-                { "Golden Gun", 19, false }, { "Silver PP7", 20, false }, { "Gold PP7", 21, false },
-                { "Magnum", 17, false }, { "Laser", 18, false }, { "2x Rocket launcher", 29, false },
-                { "2x Grenade launcher", 30, false }, { "2x RC-P90", 31, false }, { "2x Throwing knife", 32, false },
-                { "2x Hunting knife", 33, false }, { "2x Laser", 34, false },
-            };
-            auto row = [](const CheatRow& c) {
-                bool on = (VrCheatMask >> c.id) & 1ULL;
-                char label[64];
-                snprintf(label, sizeof(label), "%s%s", c.name, c.cosmetic ? "" : " *");
-                if (ImGui::Checkbox(label, &on)) {
-                    if (on) VrCheatMask |= 1ULL << c.id;
-                    else VrCheatMask &= ~(1ULL << c.id);
-                }
-            };
-            ImGui::TextColored(gold, "CHEATS");
-            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-            ImGui::TextWrapped("On from the next mission. * stops missions saving, as in the original game.");
-            ImGui::PopStyleColor();
-            if (ImGui::BeginTable("cheats", 3, ImGuiTableFlags_SizingStretchSame)) {
-                ImGui::TableNextColumn();
-                ImGui::TextColored(gold, "VR");
-                ImGui::RadioButton("Normal guns", &VrGunSizeCheat, 0);
-                ImGui::RadioButton("Tiny guns", &VrGunSizeCheat, 1);
-                ImGui::RadioButton("Big guns", &VrGunSizeCheat, 2);
-                // three even columns: the launcher page does not scroll
-                ImGui::TextColored(gold, "FUN");
-                for (int i = 0; i < 5; i++) row(fun[i]);
-                ImGui::TableNextColumn();
-                for (int i = 5; i < 9; i++) row(fun[i]);
-                ImGui::TextColored(gold, "WEAPONS");
-                for (int i = 0; i < 5; i++) row(arms[i]);
-                ImGui::TableNextColumn();
-                for (int i = 5; i < (int)(sizeof(arms) / sizeof(arms[0])); i++) row(arms[i]);
-                ImGui::EndTable();
-            }
-            if (ImGui::Button("All off")) {
-                VrCheatMask = 0;
-                VrGunSizeCheat = 0;
-            }
-            ImGui::SameLine();
-            // Issue #54, as gepc-ref D257 Game.AllUnlocked: the game's own mission
-            // select and Cheat Options, fully open (port/src/main.c, front.c).
-            // Nothing is written to the saves.
-            {
-                bool unlock = VrUnlockAll != 0;
-                if (ImGui::Checkbox("Unlock all missions and cheats", &unlock)) {
-                    VrUnlockAll = unlock ? 1 : 0;
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("Every mission at every difficulty, 007 mode, and every cheat\n"
-                                      "in the game's own Cheat Options. Your save files are left as\n"
-                                      "they are; missions you finish still count as usual.");
-                }
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Done", ImVec2(-1, 0))) {
-                cheatPage = false;
-            }
+            gevrCheatPage(cheatPage, gold);
         } else {
         // options, two columns
-        if (ImGui::BeginTable("opts", 2, ImGuiTableFlags_SizingStretchSame)) {
-            ImGui::TableNextColumn();
-            ImGui::TextColored(gold, "DISPLAY");
-            ImGui::RadioButton("Stereo VR (3D play)", &mode, 1);
-            ImGui::RadioButton("Flat screen", &mode, 0);
-            ImGui::Spacing();
-            ImGui::TextColored(gold, "SCREEN");
-            if (ImGui::IsItemHovered()) {
-#ifdef GEVR_STEAM_FRAME
-                ImGui::SetTooltip("Both grips grab the screen; right stick: distance / size.\n"
-                                  "Hold View (left controller) for a second to recentre it.");
-#else
-                ImGui::SetTooltip("Both grips grab the screen; right stick: distance / size.\n"
-                                  "Hold the left stick click to recentre it.");
-#endif
-            }
-            {
-                int curved = VrScreenCurved;
-                ImGui::RadioButton("Flat", &curved, 0);
-                ImGui::SameLine();
-                ImGui::BeginDisabled(!vr_screen_curve_supported());
-                ImGui::RadioButton("Curved", &curved, 1);
-                ImGui::EndDisabled();
-                VrScreenCurved = curved;
-                // Live: this page is on the same screen.
-                float size = VrScreenFov, dist = VrScreenDistance;
-                ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.62f);
-                if (ImGui::SliderFloat("Size", &size, VR_SCREEN_FOV_MIN, VR_SCREEN_FOV_MAX, "%.0f deg")) {
-                    vr_screen_resize(VrScreenDistance, size);
-                }
-                ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.62f);
-                if (ImGui::SliderFloat("Distance", &dist, VR_SCREEN_DISTANCE_MIN, VR_SCREEN_DISTANCE_MAX, "%.1f m")) {
-                    vr_screen_resize(dist, VrScreenFov);
-                }
-            }
-            ImGui::Spacing();
-            ImGui::TextColored(gold, "AIM STEADYING (stereo)");
-            {
-                // Issue #7: smooths hand tremor out of the aim; big moves stay instant.
-                int steady = VrAimSteady < 0 ? 0 : VrAimSteady > 2 ? 2 : VrAimSteady;
-                ImGui::RadioButton("Off##steady", &steady, 0);
-                ImGui::SameLine();
-                ImGui::RadioButton("Low##steady", &steady, 1);
-                ImGui::SameLine();
-                ImGui::RadioButton("High##steady", &steady, 2);
-                VrAimSteady = steady;
-            }
-            ImGui::Spacing();
-            ImGui::TextColored(gold, "DISPLAY RATE");
-            {
-                // 90 Hz by default; 120 shows each 60 Hz game frame exactly
-                // twice (smoothest hands) but works the headset hardest.
-                int hz = VrRefreshRate >= 110 ? 120 : VrRefreshRate > 0 && VrRefreshRate < 81 ? 72 : 90;
-                ImGui::RadioButton("72 Hz", &hz, 72);
-                ImGui::SameLine();
-                ImGui::RadioButton("90 Hz", &hz, 90);
-                ImGui::SameLine();
-                ImGui::RadioButton("120 Hz", &hz, 120);
-                VrRefreshRate = hz;
-            }
-
-            ImGui::TableNextColumn();
-            ImGui::TextColored(gold, "TURNING (stereo)");
-            ImGui::RadioButton("Smooth", &turn, 0);
-            ImGui::SameLine();
-            ImGui::RadioButton("Snap 30", &turn, 1);
-            ImGui::RadioButton("Snap 45", &turn, 2);
-            ImGui::SameLine();
-            ImGui::RadioButton("Snap 90", &turn, 3);
-            ImGui::Spacing();
-            ImGui::TextColored(gold, "COMFORT (stereo)");
-            // Movement comfort's page, on the heading's line: a small button is no
-            // taller than the text, and the page has no line to spare (below).
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Movement...")) {
-                movementPage = true;
-            }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Even movement, smooth stairs, and the experimental walking sway");
-            }
-            ImGui::Checkbox("Darken edges when moving", &vignetteOn);
-            ImGui::BeginDisabled(!vignetteOn);
-            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.62f);
-            ImGui::SliderFloat("Strength", &vignette, 0.1f, 1.0f, "%.1f");
-            ImGui::EndDisabled();
-            {
-                char throwLabel[64];
-                snprintf(throwLabel, sizeof(throwLabel), "Motion Throwing%s...", VrMotionThrowing ? "" : " (Off)");
-                if (ImGui::Button(throwLabel)) {
-                    throwingPage = true;
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("Configure motion throwing, throw strength, pitch trim, and gaze assist");
-                }
-            }
-            {
-                // Issue #6: the gun in the left hand, watch on the right wrist,
-                // move with the right stick. Live: it swaps the pointer hand too.
-                bool lefty = VrLeftHandedMode != 0;
-                if (ImGui::Checkbox("Left-handed", &lefty)) {
-                    VrLeftHandedMode = lefty ? 1 : 0;
-                }
-                // Issue #6 (a left-handed player's request): move with the
-                // other stick, its click (crouch) with it. SwapJoysticks, as
-                // PD VR names it, swaps whichever way the hand setting has them.
-                // On this line, and short: the page does not scroll and has no
-                // line to spare (a line of its own grew it about 9 px), and a
-                // column is about 600 px wide at the 2.2x scale - "Move with
-                // left stick" beside "Left-handed" needed 596 and was cut off.
-                ImGui::SameLine();
-                bool swap = VrSwapJoysticks != 0;
-                if (ImGui::Checkbox("Swap sticks", &swap)) {
-                    VrSwapJoysticks = swap ? 1 : 0;
-                }
-                // Troubleshooting readout in game: fps, refresh rate, resolution, build.
-                bool stats = VrShowStats != 0;
-                if (ImGui::Checkbox("Show stats", &stats)) {
-                    VrShowStats = stats ? 1 : 0;
-                }
-                // Issue #81: in the game, holding aim turns the move stick
-                // into lean (sideways) and duck (down). On this line, as the
-                // page has no line to spare (see Swap sticks above).
-                ImGui::SameLine();
-                bool nolean = VrAimNoLean != 0;
-                if (ImGui::Checkbox("Aim: no lean", &nolean)) {
-                    VrAimNoLean = nolean ? 1 : 0;
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("Stereo: holding the aim trigger no longer leans or ducks with the move stick,\n"
-                                      "which keeps moving you. Click the left stick to crouch.");
-                }
-                // GitHub pre-releases too (UpdateChecker.java): for trying a
-                // fix before it ships. Saved by the updater, not the ini.
-#ifndef GEVR_STEAM_FRAME   // the Frame build has no GitHub updater
-                bool tests = upd.testBuilds;
-                if (ImGui::Checkbox("Offer test builds", &tests)) {
-                    upd.testBuilds = tests;
-                    gevrUpdaterCommand(tests ? "testbuilds:1" : "testbuilds:0");
-                }
-#endif
-                // Issue #25: texture packs, on their own page.
-                if (ImGui::Button(g_ActiveExtTexPack[0] ? "Mods... (HD textures on)" : "Mods...")) {
-                    modsPage = true;
-                }
-            }
-            ImGui::EndTable();
-        }
+        gevrSettingsColumns(false, &mode, comfort, movementPage, throwingPage, modsPage, &upd, gold);
         ImGui::Separator();
         // Update line: only when there is something to say, so an
         // up-to-date launcher looks as it always has.
@@ -2804,23 +2922,9 @@ extern "C" void gevrLauncherRun(void)
             }
         }
 #ifdef GEVR_STEAM_FRAME
-        {
-            // Quit to Steam (standard.md section 1): a confirm, then the runtime is asked to end the session
-            static bool confirmQuit = false;
-            if (!confirmQuit) {
-                if (ImGui::Button("Quit to Steam")) confirmQuit = true;
-            } else {
-                ImGui::TextColored(gold, "Quit GoldenEye VR?");
-                ImGui::SameLine();
-                if (ImGui::Button("Yes, quit##quit")) {
-                    vr_log("launcher: quit to Steam");
-                    gevrQuitToSteam();
-                    confirmQuit = false;
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("No##quit")) confirmQuit = false;
-            }
-        }
+        // No "Quit to Steam" (standard.md section 1, the user 2026-10-03): SteamVR's own menu quits.
+        // Its line says where these settings are once the game is running.
+        ImGui::TextDisabled("In game, VR settings: hold Menu + View, hold Menu, or watch > Game Options.");
 #endif
         ImGui::BeginDisabled(active.empty() || !activeInfo.good);
         if (ImGui::Button("START", ImVec2(-1, ImGui::GetFrameHeight() * 1.6f))
@@ -2861,9 +2965,7 @@ extern "C" void gevrLauncherRun(void)
     }
 
     VrPlayMode = mode ? VR_PLAYMODE_STEREO : VR_PLAYMODE_SCREEN;
-    static const float snaps[] = {0.0f, 30.0f, 45.0f, 90.0f};
-    VrUseSnapTurn = snaps[turn < 0 ? 0 : turn > 3 ? 3 : turn];
-    VrComfortVignette = vignetteOn ? vignette : 0.0f;
+    gevrComfortApply(comfort);
     vrSettingsSave();
     vr_apply_refresh_rate();
     vr_log("launcher: start (%s, snap %.0f, vignette %.2f)", VrPlayMode ? "stereo" : "screen",
@@ -2875,9 +2977,307 @@ extern "C" void gevrLauncherRun(void)
     SDL_DestroyMutex(s_kbdLock);
     s_kbdLock = nullptr;
     s_kbdQueue.clear();
+    if (iconTex) glDeleteTextures(1, &iconTex);
+#ifdef GEVR_STEAM_FRAME
+    // The in-game VR settings draw with the same ImGui context, GL backend and texture: kept.
+    s_uiTex = tex;
+    s_uiFbo = fbo;
+    s_gameStarted = true;
+#else
     ImGui_ImplOpenGL3_Shutdown();
     ImGui::DestroyContext();
-    if (iconTex) glDeleteTextures(1, &iconTex);
     glDeleteFramebuffers(1, &fbo);
     glDeleteTextures(1, &tex);
+#endif
 }
+
+#ifdef GEVR_STEAM_FRAME
+/*
+ * The in-game VR settings (Steam Frame; standard.md sections 1 and 7, wear feedback 2026-10-04:
+ * the settings were only in the launcher, which only runs as the app starts).
+ *
+ * The launcher's own pages on the virtual screen, drawn once a game frame, not in a loop of their
+ * own: gfx_pc.cpp calls gevrVrSettingsOverlayDraw between its passes and shows the texture instead
+ * of the game's frame. The game keeps running underneath, in screen mode (bondview2.c
+ * gevrStereoFrame); a solo game's clock is stopped (lv.c, gevrVrSettingsFreezesGame), an online
+ * match runs on and only this player's controls are taken (input.c, gevrVrSettingsBlocksPad).
+ *
+ * Opened by: Menu + View held 0.5 s (vr_system.cpp), Menu held 1.5 s (input.c), the watch's Game
+ * Options > VR Settings (options.c), and - with a notice - the ways that used to restart into the
+ * launcher (gevrFrameBackToTitle). Closed by Resume, B, Y, a short View press or Menu; a sub-page
+ * closes first. Saved to goldeneye-vr.ini on close. Changes apply as they are made.
+ *
+ * Not offered in game: the ROM, Mods (the pack's own on/off switch is), Multiplayer, the debug log
+ * report and the stereo/flat choice (shown, greyed): they need the launcher, i.e. a fresh start.
+ * Cheats only off line ("On from the next mission" as in the launcher).
+ */
+static bool s_ovOpen = false;
+static bool s_ovReleasePending = false;   // closed, but the buttons that closed it are still down
+static bool s_ovSwallow = false;          // opened, but the buttons that opened it are still down
+static bool s_ovBackWas = true, s_ovMenuWas = true;
+static bool s_ovFocus = false;
+static std::string s_ovNotice;
+static bool s_ovHaptics = false, s_ovMovement = false, s_ovThrowing = false, s_ovCheats = false, s_ovMods = false;
+static GevrComfortChoice s_ovComfort;
+static Uint32 s_ovLast = 0;
+static Injected s_ovInj;
+
+// any button the settings or the game would read as a press (not the grips, often held, nor the sticks)
+static bool gevrOverlayButtonsDown()
+{
+    return get_button_state(1, "a") || get_button_state(1, "b") || get_button_state(0, "x") || get_button_state(0, "y")
+        || get_button_state(0, "trigger") || get_button_state(1, "trigger") || get_button_state(0, "menu")
+        || get_button_state(0, "view") || gevrSystemBack();
+}
+
+extern "C" int gevrVrSettingsOpen(const char *why)
+{
+    if (!s_gameStarted || s_uiFbo == 0 || ImGui::GetCurrentContext() == nullptr) {
+        return 0;   // the launcher is these settings until the game starts
+    }
+    if (s_ovOpen) {
+        return 1;
+    }
+    s_ovOpen = true;
+    s_ovSwallow = true;
+    s_ovBackWas = s_ovMenuWas = true;
+    s_ovFocus = true;
+    s_ovHaptics = s_ovMovement = s_ovThrowing = s_ovCheats = s_ovMods = false;
+    s_ovComfort = gevrComfortRead();
+    s_ovLast = SDL_GetTicks();
+    s_ovInj = Injected();
+    vr_screen_recenter();   // standard.md section 3: a menu is placed where you look as it opens
+    vr_log("[vr] VR settings open (%s%s)", why ? why : "?", netIsActive() ? ", online: the match runs on" : "");
+    return 1;
+}
+
+static void gevrVrSettingsClose(const char *why)
+{
+    if (!s_ovOpen) return;
+    gevrComfortApply(s_ovComfort);
+    vrSettingsSave();
+    s_ovOpen = false;
+    s_ovReleasePending = true;
+    s_ovNotice.clear();
+    vr_log("[vr] VR settings closed (%s): saved (snap %.0f, vignette %.2f, %d Hz, aim steadying %d, left-handed %d)",
+           why, VrUseSnapTurn, VrComfortVignette, VrRefreshRate, VrAimSteady, VrLeftHandedMode);
+}
+
+extern "C" int gevrVrSettingsIsOpen(void) { return s_ovOpen ? 1 : 0; }
+
+extern "C" int gevrVrSettingsFreezesGame(void) { return s_ovOpen && !netIsActive() ? 1 : 0; }
+
+extern "C" int gevrVrSettingsBlocksPad(void)
+{
+    if (s_ovReleasePending && !gevrOverlayButtonsDown()) {
+        s_ovReleasePending = false;
+    }
+    return s_ovOpen || s_ovReleasePending ? 1 : 0;
+}
+
+// The test hook's buttons while the settings are up (port/src/libultra.c): N64 layout, as in the launcher.
+extern "C" void gevrVrSettingsInject(unsigned mask, int x, int y)
+{
+    s_ovInj.mask = mask;
+    s_ovInj.x = x;
+    s_ovInj.y = y;
+    s_ovInj.frames = 1;
+}
+
+// The settings with a message first (OK closes them), for what used to restart into the launcher.
+extern "C" void gevrVrSettingsNotice(const char *message)
+{
+    if (gevrVrSettingsOpen("notice")) {
+        s_ovNotice = message ? message : "";
+    }
+}
+
+/*
+ * What used to restart into the launcher (port/vr/vr_launcher.cpp gevrRestartToLauncher: the
+ * online game's Exit, the idle kick, the cheat hook's "relaunch"). On the Frame the app was started
+ * by Steam, and the restart only ended it (device journal 2026-10-04: "Restarting into the
+ * launcher ... Exited!"). Instead: the game's own way out of a level, to the title screen, and the
+ * VR settings with a note saying how to reach the launcher again.
+ */
+extern "C" void gevrFrameBackToTitle(const char *notice)
+{
+    vr_log("[vr] back to the title screen instead of a restart (Steam Frame): %s", notice ? notice : "");
+    if (g_StageNum != 90 /* LEVELID_TITLE */) {
+        bossSetLoadedStage(90);
+    }
+    gevrVrSettingsNotice(notice);
+}
+
+extern "C" int gevrVrSettingsOverlayDraw(unsigned *texOut, int *wOut, int *hOut)
+{
+    if (!s_ovOpen) {
+        return 0;
+    }
+    ImGuiIO &io = ImGui::GetIO();
+    const Uint32 now = SDL_GetTicks();
+    io.DeltaTime = (now > s_ovLast) ? (now - s_ovLast) / 1000.0f : 1.0f / 60.0f;
+    if (io.DeltaTime > 0.25f) io.DeltaTime = 0.25f;
+    s_ovLast = now;
+
+    // Nothing answers until the buttons that opened the settings are let go.
+    if (s_ovSwallow && !gevrOverlayButtonsDown() && !s_ovInj.mask) {
+        s_ovSwallow = false;
+    }
+    bool back = false;
+    bool navUsed = false;
+    if (s_ovSwallow) {
+        io.AddKeyEvent(ImGuiKey_GamepadDpadUp, false);
+        io.AddKeyEvent(ImGuiKey_GamepadDpadDown, false);
+        io.AddKeyEvent(ImGuiKey_GamepadDpadLeft, false);
+        io.AddKeyEvent(ImGuiKey_GamepadDpadRight, false);
+        io.AddKeyEvent(ImGuiKey_GamepadFaceDown, false);
+        io.AddKeyEvent(ImGuiKey_GamepadFaceRight, false);
+        io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+        io.AddMouseButtonEvent(0, false);
+    } else {
+        // both grips: the screen in your hands, as in the launcher (input.c is not reading them now)
+        const bool grabbing = gevrScreenGrabStep(io.DeltaTime);
+        if (!grabbing) {
+            navUsed = feedGamepad(io, &s_ovInj, &back);
+        } else {
+            // no stick navigation while the stick is resizing the screen
+            io.AddKeyEvent(ImGuiKey_GamepadDpadUp, false);
+            io.AddKeyEvent(ImGuiKey_GamepadDpadDown, false);
+            io.AddKeyEvent(ImGuiKey_GamepadDpadLeft, false);
+            io.AddKeyEvent(ImGuiKey_GamepadDpadRight, false);
+            feedPointer(io, false);
+        }
+    }
+    s_ovInj = Injected();
+    if (navUsed && netIsActive()) {
+        netTouchLocalActivity();   // someone is here: no idle kick (net_core.c)
+    }
+    const bool backPressed = back && !s_ovBackWas && !s_ovSwallow;
+    s_ovBackWas = back;
+    const bool menu = get_button_state(0, "menu");
+    const bool menuPressed = menu && !s_ovMenuWas && !s_ovSwallow;
+    s_ovMenuWas = menu;
+
+    const ImVec4 gold(0.88f, 0.69f, 0.25f, 1.0f);
+    const ImVec4 good(0.5f, 0.9f, 0.5f, 1.0f);
+    const ImVec4 bad(0.95f, 0.5f, 0.4f, 1.0f);
+    const bool online = netIsActive();
+    const char *closeWhy = nullptr;
+
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGui::Begin("##vrsettings", nullptr,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
+                 | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings
+                 | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::TextColored(ImVec4(1.0f, 0.84f, 0.47f, 1.0f), "VR SETTINGS");
+    ImGui::SameLine();
+    if (online) {
+        ImGui::TextColored(bad, "  Online: the match goes on while you are here.");
+    } else {
+        ImGui::TextDisabled("  The game is paused.");
+    }
+    ImGui::Separator();
+
+    if (!s_ovNotice.empty()) {
+        ImGui::Spacing();
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextUnformatted(s_ovNotice.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::Spacing();
+        if (ImGui::Button("OK", ImVec2(-1, ImGui::GetFrameHeight() * 1.6f)) || backPressed || menuPressed) {
+            s_ovNotice.clear();
+            closeWhy = "notice read";
+        }
+        if (s_ovFocus) {
+            ImGui::SetItemDefaultFocus();
+            ImGui::SetKeyboardFocusHere(-1);
+            s_ovFocus = false;
+        }
+    } else if (s_ovHaptics || s_ovMovement || s_ovThrowing || s_ovCheats) {
+        // a page: back (or Menu) closes it, as its own Done / Back button does
+        if (backPressed || menuPressed) {
+            s_ovHaptics = s_ovMovement = s_ovThrowing = s_ovCheats = false;
+        } else if (s_ovHaptics) {
+            gevrHapticsPage(s_ovHaptics, gold, good, bad);
+        } else if (s_ovMovement) {
+            gevrMovementPage(s_ovMovement, gold);
+        } else if (s_ovThrowing) {
+            gevrThrowingPage(s_ovThrowing, gold);
+        } else {
+            gevrCheatPage(s_ovCheats, gold);
+        }
+    } else {
+        // Stereo or flat: live, as the right stick click's hold switches it in game (input.c)
+        int mode = VrPlayMode ? 1 : 0;
+        gevrSettingsColumns(true, &mode, s_ovComfort, s_ovMovement, s_ovThrowing, s_ovMods, nullptr, gold);
+        VrPlayMode = mode ? VR_PLAYMODE_STEREO : VR_PLAYMODE_SCREEN;
+        gevrComfortApply(s_ovComfort);   // live: the game reads them every frame
+        ImGui::Separator();
+        if (!online) {
+            int n = (VrGunSizeCheat ? 1 : 0) + (VrUnlockAll ? 1 : 0);
+            for (int b = 0; b < 64; b++) n += (int)((VrCheatMask >> b) & 1ULL);
+            char label[48];
+            snprintf(label, sizeof(label), n ? "Cheats... (%d on)" : "Cheats...", n);
+            if (ImGui::Button(label)) s_ovCheats = true;
+            ImGui::SameLine();
+        }
+        if (ImGui::Button(VrGunFitArmed ? "Gun fit: on" : "Gun fit...")) {
+            VrGunFitArmed = !VrGunFitArmed;
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Back in the game, with a gun in hand (stereo): the sticks move\n"
+                              "the gun on your hand. A keeps it, B puts it back.");
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Haptics...")) {
+            s_ovHaptics = true;
+        }
+        if (ImGui::Button("RESUME", ImVec2(-1, ImGui::GetFrameHeight() * 1.6f)) || backPressed || menuPressed) {
+            closeWhy = backPressed ? "back" : menuPressed ? "Menu" : "Resume";
+        }
+        if (s_ovFocus) {
+            ImGui::SetItemDefaultFocus();
+            ImGui::SetKeyboardFocusHere(-1);
+            s_ovFocus = false;
+        }
+        ImGui::TextDisabled("B, View or Menu: back. ROM, mods, multiplayer: in the launcher, at start.");
+    }
+    ImGui::End();
+    ImGui::Render();
+
+    // Into the settings' own texture, between the game's passes: ImGui's backend puts back the GL
+    // state it changes; the framebuffer, viewport, clear colour, scissor and colour mask are put
+    // back here.
+    GLint prevFbo = 0, prevViewport[4] = {0, 0, 0, 0};
+    GLfloat prevClear[4] = {0, 0, 0, 0};
+    GLboolean prevMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
+    glGetIntegerv(GL_VIEWPORT, prevViewport);
+    glGetFloatv(GL_COLOR_CLEAR_VALUE, prevClear);
+    glGetBooleanv(GL_COLOR_WRITEMASK, prevMask);
+    const GLboolean prevScissor = glIsEnabled(GL_SCISSOR_TEST);
+    glBindFramebuffer(GL_FRAMEBUFFER, s_uiFbo);
+    glViewport(0, 0, kTexW, kTexH);
+    glDisable(GL_SCISSOR_TEST);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glClearColor(0.02f, 0.02f, 0.03f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prevFbo);
+    glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
+    glClearColor(prevClear[0], prevClear[1], prevClear[2], prevClear[3]);
+    glColorMask(prevMask[0], prevMask[1], prevMask[2], prevMask[3]);
+    if (prevScissor) glEnable(GL_SCISSOR_TEST);
+
+    *texOut = s_uiTex;
+    *wOut = kTexW;
+    *hOut = kTexH;
+    if (closeWhy) {
+        gevrVrSettingsClose(closeWhy);   // this frame still shows them; the next is the game's
+    }
+    return 1;
+}
+#endif

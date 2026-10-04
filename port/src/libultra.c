@@ -282,6 +282,10 @@ s32 osContStartReadData(OSMesgQueue *mesgq)
 #include <unistd.h>
 #include "vr_diag.h"
 extern s32 g_gevrStereo;   /* bondview2.c: stereo gameplay this frame */
+#ifdef GEVR_STEAM_FRAME
+extern int gevrVrSettingsBlocksPad(void);                 /* vr_launcher.cpp: the in-game VR settings */
+extern void gevrVrSettingsInject(unsigned mask, int x, int y);
+#endif
 static u16 gevrInjectButtons; static s8 gevrInjectX, gevrInjectY; static s32 gevrInjectFrames;
 float gevrInjectTurn;
 static void gevrPollInjectedInput(void)
@@ -334,6 +338,13 @@ void osContGetReadData(OSContPad *pad)
 		} else {
 			pad->errnum = 0;
 		}
+#ifdef GEVR_STEAM_FRAME
+		/* the in-game VR settings are up (vr_launcher.cpp): the hook drives them, not the game */
+		if (i == 0 && gevrVrSettingsBlocksPad()) {
+			if (gevrInjectFrames > 0) gevrVrSettingsInject(gevrInjectButtons, gevrInjectX, gevrInjectY);
+			continue;
+		}
+#endif
 		if (i == 0 && gevrInjectFrames > 0) {
 			pad->button |= gevrInjectButtons;
 			pad->stick_x = gevrInjectX;

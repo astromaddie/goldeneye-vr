@@ -1328,6 +1328,9 @@ void lvlSetMultipliersForDifficulty(void)
  * Address: 0x7F0BF7AC (NTSC-J).
  * Address: 0x7F0BDFAC (PAL).
  */
+#ifdef GEVR_STEAM_FRAME
+extern int gevrVrSettingsFreezesGame(void);   /* port/vr/vr_launcher.cpp */
+#endif
 void lvlManageMpGame(void)
 {
     tlbmanageResetCurrentEntriesCount();
@@ -1345,6 +1348,14 @@ void lvlManageMpGame(void)
     {
         g_ClockTimer = 0;
     }
+#ifdef GEVR_STEAM_FRAME
+    /* the in-game VR settings (port/vr/vr_launcher.cpp) stop a solo game's clock: everything
+     * that moves with it (guards, objects, timers, Bond) waits. Online the match runs on. */
+    else if (gevrVrSettingsFreezesGame())
+    {
+        g_ClockTimer = 0;
+    }
+#endif
     else
     {
         g_ClockTimer = speedgraphframes;

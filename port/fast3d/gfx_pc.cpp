@@ -154,6 +154,10 @@ extern "C" void gevrMat4Mul(const float a[16], const float b[16], float out[16])
 extern "C" int gevrVrRedrawDelta(float out[16]);   // vr_openxr.cpp
 extern "C" int gevrVrRedrawHandDelta(int hand, float out[16]);
 extern "C" void gevrVrMarkRedrawn(void);
+#ifdef GEVR_STEAM_FRAME
+// vr_launcher.cpp: the in-game VR settings, drawn into their own texture; 0 while they are closed
+extern "C" int gevrVrSettingsOverlayDraw(unsigned *tex, int *w, int *h);
+#endif
 extern "C" float g_viProjectionMatrixF[4][4];     // fr.c: the game's projection
 static float s_gevrLastVignette;                  // the eye pass's, for its redraws
 int VrPauseHub = false;
@@ -1589,7 +1593,8 @@ extern "C" char g_ActiveExtTexPack[];                  /* port/src/ext_tex.c, th
 extern "C" const char *fsFullPath(const char *relPath);
 
 /*
- * X in the menu-hold prompt (input.c, bondview2.c gevrDrawReturnPrompt)
+ * X in the menu-hold prompt (input.c, bondview2.c gevrDrawReturnPrompt), or on
+ * the Steam Frame the in-game VR settings' "HD textures" (vr_launcher.cpp),
  * switches the texture pack off and on again for the session, to compare. The
  * switch lands at the next frame's start (gevr_texpack_frame).
  * 1 = on, 0 = off, -1 = no pack in use (the Mods page picked Original).
@@ -4607,6 +4612,9 @@ extern "C" void gfx_run(Gfx* commands) {
 
         // Screen pass: the game's frame into the off-screen target.
         bool screenRendered = false;
+        bool overlayUp = false;
+        unsigned overlayTex = 0;
+        int overlayW = 0, overlayH = 0;
         if (screenMode) {
             if (vr_screen_target_begin((int)targetW, (int)targetH)) {
                 gevr_screen_pass = true;
@@ -4619,6 +4627,13 @@ extern "C" void gfx_run(Gfx* commands) {
                 gevr_screen_pass = false;
                 screenRendered = true;
             }
+#ifdef GEVR_STEAM_FRAME
+            // The in-game VR settings (vr_launcher.cpp): drawn now, between the game's passes,
+            // and shown on the screen instead of the game's frame (which still runs underneath).
+            if (screenRendered && gevrVrSettingsOverlayDraw(&overlayTex, &overlayW, &overlayH)) {
+                overlayUp = true;
+            }
+#endif
             // Whatever goes into the eye buffers from here uses the real per-eye numbers.
             set_target(eyeW, eyeH);
             apply_offsets(offsets);
@@ -4697,7 +4712,9 @@ extern "C" void gfx_run(Gfx* commands) {
             vr_end_eye_render();
 
             // 6) The finished game frame goes to the compositor as a quad layer.
-            if (screenRendered) {
+            if (overlayUp) {
+                vr_screen_present_tex2d(overlayTex, overlayW, overlayH);
+            } else if (screenRendered) {
                 vr_screen_present(vr_screen_target_tex(), (int)targetW, (int)targetH);
             }
         } else if (!screenRendered && (VrEvenMovement || VrSmoothStairs || VrSwayStrength > 0.0f)) {

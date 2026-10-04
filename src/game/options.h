@@ -97,7 +97,11 @@ typedef enum WATCH_GAME_OPTIONS_INDEX {
     GAME_OPTIONS_INDEX_SCREEN_SIZE,
     GAME_OPTIONS_INDEX_RATIO,
 #ifdef GEVR
-    GAME_OPTIONS_INDEX_MIC
+    GAME_OPTIONS_INDEX_MIC,
+#ifdef GEVR_STEAM_FRAME
+    /* the in-game VR settings (port/vr/vr_launcher.cpp); offline the Microphone row is skipped */
+    GAME_OPTIONS_INDEX_VRSETTINGS,
+#endif
 #endif
 } WATCH_GAME_OPTIONS_INDEX;
 

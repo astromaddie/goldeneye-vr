@@ -91,6 +91,9 @@ void gevrRequestRecenter(s32 flags)
 #ifdef GEVR_STEAM_FRAME
 extern int gevrVrFrameProfile(void);   /* vr_input.cpp */
 extern int gevrSystemBack(void);       /* vr_system.cpp: a short View press, as the game's B */
+extern int gevrSystemMenuChord(void);  /* vr_system.cpp: Menu is part of Menu + View (no START) */
+extern int gevrVrSettingsOpen(const char *why);   /* vr_launcher.cpp: the in-game VR settings */
+extern int gevrVrSettingsBlocksPad(void);         /* vr_launcher.cpp: open, or its buttons not yet let go */
 #define GEVR_FRAME_PROFILE() (gevrVrFrameProfile() != 0)
 #else
 #define GEVR_FRAME_PROFILE() 0
@@ -129,6 +132,9 @@ extern int gevrTexpackState(void);         /* gfx_pc.cpp: 1 on, 0 off, -1 no pac
 s32 gevrTexpackToggleMsg;                  /* bondview2.c says it in a level: 2 off, 3 on */
 s32 gevrMicToggleMsg;                      /* bondview2.c says it in a level: 1 muted, 2 on */
 static bool s_menuHeld;                    /* the Menu button is down (the microphone chord's other half) */
+#ifdef GEVR_STEAM_FRAME
+static bool s_menuBlocked;                 /* the VR settings had the controllers (vr_launcher.cpp) */
+#endif
 extern int VrLeftHandedMode;               /* vr_settings.h: the physical controllers swap roles */
 extern int netVoiceIsMuted(void);
 extern void netVoiceToggleMuted(void);
@@ -1069,6 +1075,22 @@ s32 inputReadController(s32 idx, OSContPad *npad)
         const bool paused = g_CurrentPlayer && g_CurrentPlayer->pause_state != 0;
         const bool menu = bossGetStageNum() == LEVELID_TITLE || paused ||
                           (netIsActive() && g_CurrentPlayer && g_CurrentPlayer->mpmenuon);
+#ifdef GEVR_STEAM_FRAME
+        /* The in-game VR settings (vr_launcher.cpp) have the controllers while they are up, and
+         * until the buttons that closed them are let go: the game gets nothing - no pad, no turn,
+         * no trigger, and none of the direct actions below (stick-click crouch or play mode,
+         * weapon panels, the watch gesture). The settings move the screen with both grips
+         * themselves. Online the match runs on; the settings' own input keeps the activity
+         * clock (no idle kick while someone is using them). */
+        if (gevrVrSettingsBlocksPad()) {
+            gevrTurnAxis = 0.0f;
+            gevrVrTriggerDown[0] = gevrVrTriggerDown[1] = 0;
+            gevrWeaponPanelStickY = 0.0f;
+            vr_button_L_grip = 0;
+            s_menuBlocked = true;
+            return 0;   /* npad was cleared above */
+        }
+#endif
         XrVector2f left = {0}, right = {0};
         get_2d_input(0, "thumbstick", &left);
         get_2d_input(1, "thumbstick", &right);
@@ -1169,12 +1191,24 @@ s32 inputReadController(s32 idx, OSContPad *npad)
         // The app restarts into it, so the mission in progress is lost.
         // With a texture pack in use the prompt also offers X: switch the pack
         // off, or on again, for the session (gfx_pc.cpp gevrTexpackToggle).
+        // Steam Frame: no restart (the Steam-launched app would just end). The
+        // hold opens the in-game VR settings (vr_launcher.cpp), where the pack
+        // switch is too; Menu + View (vr_system.cpp) is no START and no hold.
         {
             static u32 downat = 0, startuntil = 0;
             static bool consumed = false, aWas = true, bWas = true, xWas = true;
             const u32 t = SDL_GetTicks();
             const bool held = get_button_state(0, "menu");
             s_menuHeld = held;
+#ifdef GEVR_STEAM_FRAME
+            if (s_menuBlocked) {
+                /* the VR settings had the buttons: a press begun under them is no START */
+                s_menuBlocked = false;
+                downat = 0;
+                startuntil = 0;
+                consumed = true;
+            }
+#endif
             if (gevrReturnPrompt) {
                 const bool a = get_button_state(1, "a"), b = get_button_state(1, "b") || gevrSystemBack();
                 const bool x = get_button_state(0, "x");
@@ -1223,12 +1257,21 @@ s32 inputReadController(s32 idx, OSContPad *npad)
                     micWas = mic;
                 }
                 if (!VrLeftHandedMode) npad->button &= ~B_BUTTON;
+#ifdef GEVR_STEAM_FRAME
+                if (gevrSystemMenuChord()) consumed = true;   /* Menu + View: VR settings, not START */
+                if (!consumed && t - downat >= 1500) {
+                    consumed = true;
+                    LOGI("input: menu hold -> VR settings\n");
+                    gevrVrSettingsOpen("Menu held 1.5 s");
+                }
+#else
                 if (!consumed && t - downat >= 1500) {
                     consumed = true;
                     gevrReturnPrompt = 1;
                     aWas = bWas = xWas = true;   /* a button already down does not answer */
                     LOGI("input: menu hold -> return prompt\n");
                 }
+#endif
             } else {
                 if (downat && !consumed) startuntil = t + 100;
                 downat = 0;

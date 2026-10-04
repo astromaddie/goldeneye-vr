@@ -547,7 +547,8 @@ static void gevrCheatProbe(s32 inlevel)
             sysSleep(70000000);
             continue;
         }
-        /* "relaunch": the menu-hold restart into the launcher (issue #16) */
+        /* "relaunch": the menu-hold restart into the launcher (issue #16); on the Steam
+         * Frame the title screen with a note instead (vr_launcher.cpp gevrRestartToLauncher) */
         if (strcasecmp(word, "relaunch") == 0)
         {
             extern void gevrRestartToLauncher(void);
@@ -557,6 +558,16 @@ static void gevrCheatProbe(s32 inlevel)
             gevrRestartToLauncher();
             return;
         }
+#ifdef GEVR_STEAM_FRAME
+        /* "vrsettings": open the in-game VR settings (vr_launcher.cpp), as Menu + View does */
+        if (strcasecmp(word, "vrsettings") == 0)
+        {
+            extern int gevrVrSettingsOpen(const char *why);
+
+            sysLogPrintf(LOG_NOTE, "cheathook: VR settings -> %d", gevrVrSettingsOpen("cheat hook"));
+            continue;
+        }
+#endif
         /* "give<N>": put item N (ITEM_IDS) in the inventory, e.g. give40 = camera */
         if (strncasecmp(word, "give", 4) == 0)
         {
@@ -844,6 +855,9 @@ static void gevrTexpackMessage(s32 inlevel)
     hudmsgBottomShow(msg);
 }
 
+#ifdef GEVR_STEAM_FRAME
+extern int gevrVrSettingsIsOpen(void);   /* port/vr/vr_launcher.cpp */
+#endif
 void gevrStereoFrame(s32 inlevel)
 {
     s32 opening;
@@ -867,10 +881,19 @@ void gevrStereoFrame(s32 inlevel)
         && (g_CameraMode == CAMERAMODE_FP || (netIsActive() && g_CameraMode == CAMERAMODE_NONE))
         && pl->cameramode != 1
         && (pl->pause_state == 0 || opening)
-        && !pl->bonddead;
+        && !pl->bonddead
+#ifdef GEVR_STEAM_FRAME
+        /* the in-game VR settings (vr_launcher.cpp) are drawn on the virtual screen */
+        && !gevrVrSettingsIsOpen()
+#endif
+        ;
 
     gevrVrScreenHeadLock(!want && inlevel && VrPlayMode != 0 && pl != NULL
-                         && pl->watch_animation_state != 0);
+                         && pl->watch_animation_state != 0
+#ifdef GEVR_STEAM_FRAME
+                         && !gevrVrSettingsIsOpen()   /* placed in the room, for the laser */
+#endif
+                         );
 
     if (want && !s_gevrStereoWas)
     {

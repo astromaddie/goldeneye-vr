@@ -27,6 +27,15 @@ static void gevrMicOptionInput(void);
 static Gfx *gevrDrawMicOption(Gfx *gdl, s32 y);
 /* Row pitch while the Microphone row shares the eight toggles' space. */
 #define GEVR_MIC_YINC (YINC - 2)
+#ifdef GEVR_STEAM_FRAME
+static void gevrVrSettingsOptionInput(void);
+static Gfx *gevrDrawVrSettingsOption(Gfx *gdl, s32 y);
+extern int gevrVrSettingsOpen(const char *why);   /* port/vr/vr_launcher.cpp */
+/* the toggles' pitch with the VR Settings row (and online the Microphone row) under them */
+#define GEVR_ROWS_YINC() (netIsActive() ? YINC - 3 : YINC - 2)
+#else
+#define GEVR_ROWS_YINC() (netIsActive() ? GEVR_MIC_YINC : YINC)
+#endif
 #endif
 
 #define WATCH_BACKGROUND_VERTEX_COUNT 30
@@ -967,6 +976,9 @@ void controller_options_inputs_navigation(void)
 void sub_GAME_7F0A5998(void)
 {
     s32 aux;
+#ifdef GEVR_STEAM_FRAME
+    s32 prev = game_options_index;
+#endif
 
     if ((joyGetButtonsPressedThisFrame(PLAYER_1, U_CBUTTONS|U_JPAD)) || (sub_GAME_7F0A5088()))
     {
@@ -983,6 +995,23 @@ void sub_GAME_7F0A5998(void)
 
     aux = game_options_index;
 
+#ifdef GEVR_STEAM_FRAME
+    /* the last row is VR Settings (11); offline there is no Microphone row (10) to stop on */
+    if (aux == GAME_OPTIONS_INDEX_MIC && !netIsActive())
+    {
+        aux = game_options_index = prev < aux ? GAME_OPTIONS_INDEX_VRSETTINGS : GAME_OPTIONS_INDEX_RATIO;
+    }
+    if (aux > GAME_OPTIONS_INDEX_VRSETTINGS)
+    {
+        game_options_index = GAME_OPTIONS_INDEX_MUSIC;
+        return;
+    }
+    if (aux < 0)
+    {
+        game_options_index = GAME_OPTIONS_INDEX_VRSETTINGS;
+    }
+    return;
+#endif
     if (aux >=
 #ifdef GEVR
         (netIsActive() ? 11 : 10)
@@ -1011,7 +1040,11 @@ void game_options_music_volume_navigation(void)
 {
     if (joyGetButtonsPressedThisFrame(PLAYER_1, U_CBUTTONS|U_JPAD) || sub_GAME_7F0A5088())
     {
+#ifdef GEVR_STEAM_FRAME
+        game_options_index = GAME_OPTIONS_INDEX_VRSETTINGS;   /* up from the top: the last row */
+#else
         game_options_index = GAME_OPTIONS_INDEX_RATIO;
+#endif
         disable_watch_stick_y_nav_ready();
         reset_watch_item_is_actively_selected();
         return;
@@ -1680,6 +1713,12 @@ void sub_GAME_7F0A6A80(void)
                     sub_GAME_7F0A5998();
                     gevrMicOptionInput();
                     break;
+#ifdef GEVR_STEAM_FRAME
+                case GAME_OPTIONS_INDEX_VRSETTINGS:
+                    sub_GAME_7F0A5998();
+                    gevrVrSettingsOptionInput();
+                    break;
+#endif
 #endif
             }
             watch_screen3_navigation();
@@ -3735,6 +3774,35 @@ static Gfx *gevrDrawMicOption(Gfx *gdl, s32 y)
 #endif
 
 
+#ifdef GEVR_STEAM_FRAME
+/*
+ * The Steam Frame's VR Settings row: A on it opens the in-game VR settings
+ * (port/vr/vr_launcher.cpp) - A selects a row (watch_play_beep_sound), and a
+ * selected VR Settings row opens them and lets go at once.
+ */
+static void gevrVrSettingsOptionInput(void)
+{
+    if (game_options_index != GAME_OPTIONS_INDEX_VRSETTINGS || !watch_item_is_actively_selected)
+    {
+        return;
+    }
+    reset_watch_item_is_actively_selected();
+    if (gevrVrSettingsOpen("watch, Game Options"))
+    {
+        sndPlaySfx(g_musicSfxBufferPtr, OPTION_CHOOSE_SFX, NULL);
+    }
+}
+
+/* Drawn as the Microphone row's label, with no values: it is a button. */
+static Gfx *gevrDrawVrSettingsOption(Gfx *gdl, s32 y)
+{
+    s32 selected = game_options_index == GAME_OPTIONS_INDEX_VRSETTINGS;
+
+    return draw_options_labels(gdl, XOFFSET_1, y, "VR Settings...", selected ? 0xA0FFA0F0 : 0xFF00B0, 0, -1, 0, 0, 0x3000B0, 0);
+}
+#endif
+
+
 /**
  * Address: 7F0AB908
  *
@@ -3893,11 +3961,8 @@ Gfx *draw_toggle_options(Gfx *gdl)
 
 #ifdef GEVR
     /* In a multiplayer game the Microphone row (gevrDrawMicOption) shares
-     * the eight rows' space. */
-    if (netIsActive())
-    {
-        yinc = GEVR_MIC_YINC;
-    }
+     * the eight rows' space; on the Steam Frame the VR Settings row too. */
+    yinc = GEVR_ROWS_YINC();
 #endif
 
     gdl = microcode_constructor(gdl);
@@ -4008,8 +4073,11 @@ Gfx *draw_watch_game_options_page(Gfx *gdl, Mtx *param_2) {
 #ifdef GEVR
         if (netIsActive())
         {
-            gdl = gevrDrawMicOption(gdl, YOFFSET_1 + 8 * GEVR_MIC_YINC);
+            gdl = gevrDrawMicOption(gdl, YOFFSET_1 + 8 * GEVR_ROWS_YINC());
         }
+#ifdef GEVR_STEAM_FRAME
+        gdl = gevrDrawVrSettingsOption(gdl, YOFFSET_1 + (netIsActive() ? 9 : 8) * GEVR_ROWS_YINC());
+#endif
 #endif
     }
 
