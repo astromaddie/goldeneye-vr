@@ -280,6 +280,8 @@ s32 osContStartReadData(OSMesgQueue *mesgq)
  */
 #include <stdio.h>
 #include <unistd.h>
+#include "vr_diag.h"
+extern s32 g_gevrStereo;   /* bondview2.c: stereo gameplay this frame */
 static u16 gevrInjectButtons; static s8 gevrInjectX, gevrInjectY; static s32 gevrInjectFrames;
 float gevrInjectTurn;
 static void gevrPollInjectedInput(void)
@@ -336,6 +338,10 @@ void osContGetReadData(OSContPad *pad)
 			pad->button |= gevrInjectButtons;
 			pad->stick_x = gevrInjectX;
 			pad->stick_y = gevrInjectY;
+		}
+		if (i == 0 && g_gevrStereo && gevrDiag()->diag_walk != 0) {
+			/* vr-diag.ini diag_walk (Frame build): stereo play holds the move stick, as its C-buttons */
+			pad->button |= gevrDiag()->diag_walk > 0 ? U_CBUTTONS : D_CBUTTONS;
 		}
 		if (i == 0 && (pad->button != 0 || pad->stick_x != 0 || pad->stick_y != 0)) {
 			/* PORT probe: proof that controller input reaches the game */

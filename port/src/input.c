@@ -63,7 +63,13 @@ extern s32 gevrStereoTwoHandClass(void);  /* bondview2.c: 0 handgun, 1 long gun 
 static float gevrTurnAxis = 0.0f;
 static s32 gevrRecenterPending = 0;   /* 1 recentre, 2 recentre and re-take the standing height */
 extern float gevrInjectTurn;   /* libultra.c: the PC input hook's turn */
-float gevrVrTurnAxis(void) { return gevrInjectTurn != 0.0f ? gevrInjectTurn : gevrTurnAxis; }
+extern float gevrDiagTurn(void);   /* vr_diag.c: vr-diag.ini diag_turn (Frame build), 0 = none */
+float gevrVrTurnAxis(void)
+{
+    if (gevrInjectTurn != 0.0f) return gevrInjectTurn;
+    if (gevrDiagTurn() != 0.0f) return gevrDiagTurn();   /* unattended runs: a constant smooth turn */
+    return gevrTurnAxis;
+}
 s32 gevrVrTakeRecenter(void)
 {
     s32 pending = gevrRecenterPending;

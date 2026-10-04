@@ -27,6 +27,8 @@ typedef struct GevrDiag {
     float exit_after_s;        /* quit to Steam this many seconds after the first XR frame (unattended runs), 0 = never */
     int   one_shot;            /* rename the file to vr-diag.ini.used once read, so the next launch runs normally */
     int   refresh_rate;        /* request this display rate instead of the ini's VrRefreshRate, 0 = the ini's */
+    int   diag_walk;           /* in stereo play hold the move stick: 1 forward (C-up), -1 back (C-down), 0 = off */
+    float diag_turn;           /* in stereo play a constant smooth turn, -100..100 % of the stick (snap turn off) */
 } GevrDiag;
 
 /* The settings; the file is read on the first call. Never NULL. */
@@ -35,6 +37,9 @@ const GevrDiag *gevrDiag(void);
 /* Convenience for the game files, which see only C and no struct. */
 int gevrDiagBootStage(void);
 int gevrDiagDifficulty(void);
+
+/* diag_turn as the turn stick's -1..1, 0 when unset (always 0 outside the Frame build). */
+float gevrDiagTurn(void);
 
 /* Once per XR frame: the exit_after_s timer. */
 void gevrDiagFrameTick(double nowMs);

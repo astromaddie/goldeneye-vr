@@ -231,6 +231,7 @@ extern void gevrVrSetWorldScale(float unitsPerMetre);
 extern void vr_align_with_game_angle(float target_game_angle);
 extern void vr_screen_recenter(void);
 extern float gevrVrTurnAxis(void);       /* input.c: right stick X, dead-zoned */
+extern float gevrDiagTurn(void);         /* vr_diag.c: vr-diag.ini diag_turn, -1..1 (0 = none) */
 extern s32 gevrVrTakeRecenter(void);     /* input.c: both stick clicks */
 extern void gevrVrSnapshotCameraPose(void); /* vr_openxr.cpp */
 extern void gevrVrHeadPosCm(float out[3]);   /* vr_openxr.cpp */
@@ -911,7 +912,7 @@ void gevrStereoFrame(s32 inlevel)
         {
             s_gevrSnapArmed = TRUE;
         }
-        else if (VrUseSnapTurn != 0.0f)
+        else if (VrUseSnapTurn != 0.0f && gevrDiagTurn() == 0.0f)   /* vr-diag.ini diag_turn turns smoothly */
         {
             if (fabsf(x) < 0.1f)
             {
