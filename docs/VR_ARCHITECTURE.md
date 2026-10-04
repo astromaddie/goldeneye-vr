@@ -55,7 +55,14 @@ Frame-only.
   pointer.
 - Session states are logged by name. `shouldRender=false` (headset off the head) still ticks the
   game and submits empty frames; `force_render` draws anyway.
-- Quit to Steam: `xrRequestExitSession`; on `EXITING` (or 3 s) `MainActivity.quitApp` finishes the task and a plain thread kills the process about a second later (`SDLActivity.onDestroy` joins the SDL thread without a timeout, so nothing may depend on the main looper).
+- Quitting is SteamVR's job (standard section 1, the user 2026-10-03): no menu offers it, and the
+  launcher's old Quit to Steam row is gone. The app still ends cleanly when the runtime says
+  `EXITING` or `LOSS_PENDING`: `MainActivity.quitApp` finishes the task and a plain thread kills the
+  process about a second later (`SDLActivity.onDestroy` joins the SDL thread without a timeout, so
+  nothing may depend on the main looper). `gevrQuitToSteam` (`xrRequestExitSession`, then the same
+  path on `EXITING` or after 3 s) is kept for `vr-diag.ini` `exit_after_s`.
+- Nothing restarts into the launcher on the Frame: the app was started by Steam, and the restart
+  only ended it (device journal 2026-10-04). See "In-game VR settings" in section 5.
 
 ## 3. Camera-relative draw inventory (this Fast3D multiview path)
 
@@ -174,6 +181,34 @@ Profiles suggested (the log prints each `xrSuggestInteractionProfileBindings` re
 `tools/steam_frame/tests/check_bindings.py` checks every suggested path against the profile's
 component list (it fails on the old Index block).
 
+### The gun's aim (Frame build; wear feedback 2026-10-04)
+
+The game builds the gun from the grip pose with an axis map measured on Quest Touch (right = grip
++X, up = grip -Z, back = grip +Y, so the barrel is grip -Y). On the Frame controller that barrel
+pointed 30-45 degrees below where the hand points. Now each controller's rigid grip-to-aim turn is
+measured whenever both poses are tracked at the same time, and kept through tracking loss:
+
+    off = conj(grip) * aim * Rx(+90)        gun = grip * off
+
+`Rx(+90)` maps the aim pose's axes onto the grip map, so the gun's barrel is the aim pose's -Z (the
+same ray as the menu laser), its up the aim's +Y, its right the aim's +X. With no offset (Quest, or
+before the first aim pose) the gun is the grip, exactly as before. Code: `vr_aim_math.{h,c}` (pure,
+host-tested), `vr_input.cpp` (`gevrVrAimOffset`, by role, so left-handed mode follows; the log says
+`[vr] aim offset, right controller: grip to aim N deg` once and on any change over 2 degrees),
+`bondview2.c` `gevrHandAxes`/`gevrGunAxes`.
+
+Who uses which axes:
+
+| Gun axes (aim-corrected) | Grip axes (unchanged) |
+| --- | --- |
+| gun model (`gevrStereoGunMatrix`), shots and their spread (`gevrStereoShot`), crosshair (`gevrStereoAimTarget`), scope lens and scope camera (both the game's lens state and `vr_openxr.cpp`'s fallback), two-handed hold and the off hand's place on the gun, tank turret pitch | watch arm and face, the watch laser (and shooting from the watch), melee chops, motion throwing, the watch gesture, the menu layer on the hand |
+
+The gun turns about the controller (the hand), and its fit trim (`GunOffX/Y/Z`, fitted in grip
+axes on Quest) turns with it, so the gun keeps the same place in the hand and only its angle
+changes. The other choice - keep the model's origin where the grip axes put it and turn only the
+basis - would swing the handle about 8 cm out of the hand at a 40 degree offset (the model origin is
+12 cm behind the fist). The scope lens, placed from the same origin and axes, stays on the eyepiece.
+
 ### Steam Frame control map (the physical layout is fixed; left-handed play swaps what is bound to a hand)
 
 | Physical | Game |
@@ -185,13 +220,52 @@ component list (it fails on the old Index block).
 | B | the game's B: use/reload; menus: back |
 | X | the off hand's weapon cycle / left panel (stereo); the game's A in menus |
 | Y | the game's B (same as B) |
-| R Menu | START (pause, the watch); hold 1.5 s: "back to the launcher? A yes, B no (or a short View press), X texture pack"; Quit to Steam is in the launcher, with a confirm |
+| R Menu | START (pause, the watch); hold 1.5 s: VR settings (the Quest build's "back to the launcher?" prompt would end the Steam-launched app, so the Frame has none) |
+| R Menu + L View, together 0.5 s | VR settings, with a `ui_click` buzz on both hands. That View press is no Back and no recentre, and that Menu press no START and no Menu hold, even when let go early |
 | L View | system layer: short press Back in menus; hold 1 s recentre; hold 3 s recentre + standing height |
 | L D-pad | menus and the launcher: navigate; stereo play: up/down step the gun hand's weapon, left/right the off hand's |
 | Bumpers | stereo play: left bumper previous, right bumper next weapon of the gun hand (as D-pad up/down); the tertiary role |
 
 X/Y keep what the Touch left X/Y did, so a mission plays the same on both; the choice is open for
-the wearer to change (section 10).
+the wearer to change (the questions in section 9).
+
+### In-game VR settings (Frame build; `vr_launcher.cpp`, end of file)
+
+Openers: Menu + View held 0.5 s (`vr_system.cpp`), Menu held 1.5 s (`input.c`), and **VR
+Settings...** at the bottom of the watch's Game Options page (`options.c`; A on it). A test hook too:
+`vrsettings` in `gevr_cheat.txt`. Not before the game starts: the launcher is these settings then.
+
+- **Same pages as the launcher.** The launcher's page bodies are functions now (`gevrSettingsColumns`,
+  `gevrMovementPage`, `gevrThrowingPage`, `gevrCheatPage`, plus the existing Haptics page) used by
+  both. One ImGui context, GL backend and 1280x960 texture, created by the launcher and kept (the
+  Quest build still destroys them at Start).
+- **Not blocking.** `gfx_pc.cpp` calls `gevrVrSettingsOverlayDraw` once a game frame, after the screen
+  pass and before the eye pass; ImGui's backend restores the GL state it touches, and the framebuffer,
+  viewport, clear colour, scissor and colour mask are restored around it. The settings texture goes to
+  the virtual screen instead of the game's frame. `gevrStereoFrame` forces screen mode while they are
+  up (and drops the watch's head lock, so the laser hits the screen where it is drawn); the screen is
+  placed in front of you as they open.
+- **Input.** The launcher's own feeders (`feedGamepad`, `feedPointer`): the laser and trigger, the
+  sticks or D-pad and A, both grips to move the screen. B, Y, a short View press or Menu close a page,
+  then the settings. Buttons already down when they open do not answer until let go; the game gets
+  nothing while they are up and until the buttons that closed them are let go (`input.c` returns
+  early, `libultra.c` hands the PC test hook's buttons to the settings).
+- **The game.** Solo: the clock stops (`lv.c`, `g_ClockTimer = 0`, as the game's own pause) and the
+  frame keeps drawing underneath. Online the match cannot pause: the settings are modal for this
+  player only, the netcode keeps running, the header says the match goes on, and their own input
+  counts as activity (no idle kick while someone is using them).
+- **Applied live:** stereo or flat, screen shape, size and distance, aim steadying, display rate
+  (`vr_apply_refresh_rate` at once), turning, vignette, the Movement and Motion throwing pages,
+  left-handed, swap sticks, show stats, aim no-lean, haptics, the HD pack's on/off for the session,
+  Gun fit (armed for when you are back in the game), cheats (solo only, "from the next mission").
+  Saved with `vrSettingsSave` on close.
+- **Launcher only, left out in game:** the ROM, Mods (choosing a pack), Multiplayer, the debug-log
+  report. A line at the bottom says so.
+- **What used to restart into the launcher** (online Exit in the multiplayer menu, the 5-minute idle
+  kick, the cheat hook's `relaunch`, any other `gevrRestartToLauncher`): the online session is left as
+  before, then the game goes to the title screen its own way and the VR settings open on a note
+  ("You left the online game... to join another, quit from the SteamVR menu and start GoldenEye VR
+  again"). OK closes it. Nothing quits by itself.
 
 ## 6. Diagnostics (Frame build only, never in the menus)
 
@@ -257,7 +331,13 @@ States: **played in headset**, **verified unattended**, **not started**.
 | Frame profile suggested and active; Index suggest fixed | built, not yet run on the device (the Frame went offline, see below); controls not started |
 | Frame controls, D-pad, bumpers | not started (built, untested on device) |
 | System layer: View short/hold, recentre, height | host-tested state machine; not started on device |
-| Quit to Steam | built, not started on device |
+| Quit to Steam | removed from the launcher (standard section 1, 2026-10-03); EXITING / LOSS_PENDING handling kept |
+| Gun aim from the aim pose (grip-to-aim offset) | built, not yet run on the device (host-tested math) |
+| In-game VR settings (overlay, all three openers, solo freeze, online modal) | built, not yet run on the device |
+| Menu + View chord (0.5 s, suppression of Back, recentre and START) | built, not yet run on the device (host-tested timing) |
+| Menu hold 1.5 s opens VR settings (no restart prompt on the Frame) | built, not yet run on the device |
+| Online Exit, idle kick: title screen and a note instead of a restart | built, not yet run on the device |
+| Settings loader: integer and decimal spellings of every key | host-tested (round trip of every key the VR settings change) |
 | Menu laser pointer from the aim pose (Frame build) | built, not yet run on the device. Worn report 2026-10-03 on the first build: the pointer did not line up with the controller (it pointed along the grip pose's -Y, tuned on Touch) |
 | Worn: scale, HUD distance, comfort, control labels | first wear 2026-10-03 on the phase-1 build (no Frame profile): the menu pointer was off; nothing else reported yet |
 | Even movement: body drawn between ticks at display time, even walking speed, no run boost | verified unattended (2026-10-04, 90 Hz, Dam, `diag_walk`): `[vr-move]` steady-speed windows step a constant 5.67 cm a frame (sd 0.00) at 509 cm/s; 90 fps, 0 missed. Not worn |
@@ -279,22 +359,36 @@ controllers). Before: `deploy.sh --no-force-render` (no `vr-diag.ini` left over;
 file is removed if you ask for `--diag-reset`).
 
 1. Launcher (1 min): panel in front at a readable distance? Point with either controller and pull
-   the trigger; D-pad and A also work. Try **Quit to Steam** > No.
+   the trigger; D-pad and A also work. (No Quit row any more: SteamVR's menu quits.)
 2. START, **Dam** (6 min): is the world life size (a doorway looks 2 m)? If not, tell me the
    scale and your eye height (`PlayerHeight`). Walk, turn with the right stick (30 degree snaps),
    crouch (left stick click). Aim: one-handed, then two-handed on a rifle.
 3. Weapons (2 min): A taps next weapon, grip + A back, hold A for the panel; X the left hand; D-pad
    up/down. Do the labels on screen match the buttons you press?
-4. HUD (1 min): is the ammo/health readable at its distance? Does the crosshair sit where the gun
-   points?
+4. HUD and aim (1 min): is the ammo/health readable at its distance? Point at something with the
+   controller held naturally: do the gun's barrel, the crosshair and the shots go where your hand
+   points (wear feedback 2026-10-04: they were 30-45 degrees low)?
 5. Cutscene (1 min): the intro and a mission-end cutscene on the virtual screen: distance, size,
    comfort.
-6. Pause/watch (1 min): R Menu opens the watch; B and a short View press go back; hold R Menu 1.5 s
-   for the prompt (do not confirm).
+6. Pause/watch and VR settings (2 min): R Menu opens the watch; B and a short View press go back.
+   Hold Menu + View half a second: VR settings over a paused game, a click in both hands. Change the
+   turning, close with B. Hold Menu alone 1.5 s: the same settings. On the watch: Game Options >
+   VR Settings... and A.
 7. Recentre (1 min): look 45 degrees off, hold View 1 s: do you feel the buzz, and is the view
    now straight ahead? Hold 3 s while standing straight.
-8. Quit (30 s): launcher > Quit to Steam > Yes: back in the Steam library without a hang?
+8. Quit (30 s): the SteamVR menu's quit: back in the Steam library without a hang?
 
 Questions: scale and `PlayerHeight`; HUD distance and legibility; any discomfort (what, when);
 which button labels or positions felt wrong (X/Y, D-pad, bumpers); whether 72 Hz held (the
 launcher's Show stats); did the controllers' tracking/hand poses look right.
+
+## 10. Wear feedback 2026-10-04
+
+Four findings from the user's session on the Frame:
+
+| Finding | Status |
+| --- | --- |
+| The gun, its shots and the crosshair aimed 30-45 degrees below where the hand points (the grip map was tuned on Touch) | fixed from the aim pose, see "The gun's aim" in section 5; built, not yet run on the device |
+| VR settings could not be opened in game; Menu + View held did nothing | in-game VR settings with three openers (section 5); built, not yet run on the device |
+| Holding Menu offered "back to the launcher", and yes ended the Steam-launched app ("Restarting into the launcher ... Exited!") | on the Frame the hold opens VR settings, and every restart path goes to the title screen with a note; built, not yet run on the device |
+| The watch | a mockup of a redesign is in progress (separate work, `scratchpad/`) |
