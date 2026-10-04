@@ -713,9 +713,9 @@ static const char* menuOverlayFsSrc =
         "#version 330 core\n"
         "in vec2 vUV;\n"
         "out vec4 outColor;\n"
-        "uniform sampler2D uTex;\n"
+        "uniform sampler2DArray uTex;\n"   /* a HUD capture: its image is layer 0 */
         "void main() {\n"
-        "    outColor = texture(uTex, vUV);\n"
+        "    outColor = texture(uTex, vec3(vUV, 0.0));\n"
         "}\n";
 
 static void menuOverlayInit() {
@@ -778,7 +778,7 @@ extern "C" void gfx_opengl_draw_mirror_menu_overlay(GLuint menuTex, const float*
     glUniformMatrix4fv(menuOverlayMvpLoc, 1, GL_FALSE, mvp);
 
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, menuTex);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, menuTex);
     glUniform1i(menuOverlayTexLoc, 0);
 
     glBindVertexArray(menuOverlayVao);
@@ -2398,7 +2398,7 @@ static void gfx_opengl_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_
     }
 
 
-    // A HUD capture draws into a single 2D texture, so it hides the right eye by
+    // A HUD capture keeps one image (layer 0 of its two-view target), so it hides the right eye by
     // pushing that eye's geometry far away. That is correct while capturing --
     // but these uniforms are per shader program, and the real values are only
     // uploaded when a program is bound. Setting them here and never putting them
@@ -3545,6 +3545,89 @@ bool gfx_opengl_start_draw_to_framebuffer(int fbid, float noisescale) {
 
 
 // ============================================================================
+// VR - the HUD captures' targets (L, R, H, P): two views, like the eye buffers
+// ============================================================================
+/*
+ * The captures draw the game's HUD with the game's programs, which declare
+ * num_views = 2 (GL_OVR_multiview2). Into a plain 2D target that is
+ * GL_INVALID_OPERATION by the extension's spec: Quest's driver let it pass,
+ * Mesa (Zink on the Steam Frame) drops every draw, so on the Frame the ammo
+ * counter, the health and armour, the messages and prompts and the weapon
+ * panel were all empty quads (found with vr-diag.ini diag_gl, 2026-10-04).
+ * Each capture is now a two-layer array attached as two views, as the scope's
+ * target (gevr_scope_make_target) and the virtual screen: its image is layer
+ * 0 (the capture pushes view 1's geometry away, gForceFlatShaderForMenu), and
+ * the readers take layer 0: gfx_opengl_vr_capture_read_fbo for blits, the
+ * array itself (gfx_opengl_get_vr_menu_texture*) for vr_openxr.cpp's copy.
+ * glTexImage3D, not glTexStorage3D: glad leaves GL 4.2 entry points NULL on
+ * GLES 3.2. Without multiview (no stereo at all) layer 0 alone is attached.
+ */
+static std::map<int, GLuint> s_captureReadFbo;   // a capture's framebuffer id -> layer 0 alone, for reads
+
+static void gevr_capture_target_ensure(int& fbId, uint32_t w, uint32_t h)
+{
+    w = max(w, 1U);
+    h = max(h, 1U);
+    if (fbId <= 0) {
+        fbId = (int)framebuffers.size();
+        framebuffers.resize(fbId + 1);
+        Framebuffer& nf = framebuffers[fbId];
+        nf = Framebuffer{};
+        glGenTextures(1, &nf.clrbuf);
+        glGenTextures(1, &nf.rbo);   // a depth/stencil array texture here, not a renderbuffer
+        glGenFramebuffers(1, &nf.fbo);
+        glGenFramebuffers(1, &s_captureReadFbo[fbId]);
+    }
+    Framebuffer& fb = framebuffers[fbId];
+    if (fb.width == w && fb.height == h) {
+        return;
+    }
+    GLint prevArray = 0, prevFbo = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &prevArray);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, fb.clrbuf);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, (GLsizei)w, (GLsizei)h, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, fb.rbo);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH24_STENCIL8, (GLsizei)w, (GLsizei)h, 2, 0,
+                 GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, NULL);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, (GLuint)prevArray);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, fb.fbo);
+    const bool twoViews = use_multiview && glFramebufferTextureMultiviewOVR != nullptr;
+    if (twoViews) {
+        glFramebufferTextureMultiviewOVR(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, fb.clrbuf, 0, 0, 2);
+        glFramebufferTextureMultiviewOVR(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, fb.rbo, 0, 0, 2);
+    } else {
+        glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, fb.clrbuf, 0, 0);
+        glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, fb.rbo, 0, 0);
+    }
+    const GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    glBindFramebuffer(GL_FRAMEBUFFER, s_captureReadFbo[fbId]);
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, fb.clrbuf, 0, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prevFbo);
+    LOGI("HUD capture fb %d: %ux%u %s target %s (0x%x)", fbId, w, h, twoViews ? "two-view" : "one-layer",
+         st == GL_FRAMEBUFFER_COMPLETE ? "ready" : "incomplete", st);
+
+    fb.width = w;
+    fb.height = h;
+    fb.has_depth_buffer = true;
+    fb.msaa_level = 1;
+    fb.invert_y = false;
+    fb.is_multiview = false;   // only framebuffer 0 (the eyes, the screen) is the managed multiview one
+}
+
+// A capture's layer 0 as a read framebuffer (blits, glReadPixels), 0 when it has none.
+static GLuint gfx_opengl_vr_capture_read_fbo(int fbId)
+{
+    auto it = s_captureReadFbo.find(fbId);
+    return it == s_captureReadFbo.end() ? 0 : it->second;
+}
+
+// ============================================================================
 // VR Layers HUD/MENU LEFT Hand
 // ============================================================================
 
@@ -3557,23 +3640,9 @@ static GLint gVrMenuCaptureViewport[4] = {0, 0, 0, 0 };
 extern void gfx_flush(void);
 
 static void gfx_opengl_vr_menu_fb_init(void) {
-    int w = vr_get_internal_render_width();
-    int h = vr_get_internal_render_height();
-
-    if (gVrMenuFb < 0) {
-        gVrMenuFb = gfx_opengl_create_framebuffer();
-    }
-
-    // Recreate/resize if the VR resolution has changed (e.g. on the first frame)
-    gfx_opengl_update_framebuffer_parameters(
-            gVrMenuFb,
-            (uint32_t)w, (uint32_t)h,
-            /*msaa_level=*/1,
-            /*opengl_invert_y=*/false,
-            /*render_target=*/true,
-            /*has_depth_buffer=*/true,
-            /*can_extract_depth=*/true
-    );
+    // made, or remade if the VR resolution has changed (e.g. on the first frame): two views
+    gevr_capture_target_ensure(gVrMenuFb, (uint32_t)vr_get_internal_render_width(),
+                               (uint32_t)vr_get_internal_render_height());
 }
 
 bool gfx_vr_menu_L_dirty_and_clear(void) {
@@ -3682,14 +3751,8 @@ static GLint gVrMenuRCaptureViewport[4] = {0, 0, 0, 0};
 
 static void gfx_opengl_vr_menu_R_fb_init(void)
 {
-    int w = vr_get_internal_render_width();
-    int h = vr_get_internal_render_height();
-    if (gVrMenuRFb < 0)
-        gVrMenuRFb = gfx_opengl_create_framebuffer();
-    gfx_opengl_update_framebuffer_parameters(
-            gVrMenuRFb, (uint32_t)w, (uint32_t)h,
-            /*msaalevel*/1, /*inverty*/false,
-            /*rendertarget*/true, /*hasdepth*/true, /*canextractdepth*/true);
+    gevr_capture_target_ensure(gVrMenuRFb, (uint32_t)vr_get_internal_render_width(),
+                               (uint32_t)vr_get_internal_render_height());
 }
 
 void gfx_vr_hud_capture_begin_R(void)
@@ -3765,7 +3828,7 @@ static void gevr_measure_R_capture(void)
     GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
     glDisable(GL_SCISSOR_TEST);
 
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffers[gVrMenuRFb].fbo);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, gfx_opengl_vr_capture_read_fbo(gVrMenuRFb));   // layer 0: a blit can't read two views
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_gevrRBoxFbo);
     glBlitFramebuffer(0, 0, w, h, 0, 0, S, S, GL_COLOR_BUFFER_BIT, GL_LINEAR);
 
@@ -3843,14 +3906,8 @@ static GLint gVrMenuHCaptureViewport[4] = {0,0,0,0};
 
 
 static void gfx_opengl_vr_menu_H_fb_init(void) {
-    int w = vr_get_internal_render_width();
-    int h = vr_get_internal_render_height();
-    if (gVrMenuHFb <= 0)
-        gVrMenuHFb = gfx_opengl_create_framebuffer();
-    gfx_opengl_update_framebuffer_parameters(
-            gVrMenuHFb, (uint32_t)w, (uint32_t)h,
-            /*msaalevel=*/1, /*inverty=*/false,
-            /*rendertarget=*/true, /*hasdepth=*/true, /*canextractdepth=*/true);
+    gevr_capture_target_ensure(gVrMenuHFb, (uint32_t)vr_get_internal_render_width(),
+                               (uint32_t)vr_get_internal_render_height());
 }
 
 void gfx_vr_hud_capture_begin_H(void)
@@ -3963,16 +4020,8 @@ static GLint gVrMenuPPrevViewport[4] = {0,0,0,0};
 void gfx_vr_hud_capture_begin_P(void)
 {
     gfx_flush();
-    {
-        int w = vr_get_internal_render_width();
-        int h = vr_get_internal_render_height();
-        if (gVrMenuPFb <= 0)
-            gVrMenuPFb = gfx_opengl_create_framebuffer();
-        gfx_opengl_update_framebuffer_parameters(
-                gVrMenuPFb, (uint32_t)w, (uint32_t)h,
-                /*msaalevel=*/1, /*inverty=*/false,
-                /*rendertarget=*/true, /*hasdepth=*/true, /*canextractdepth=*/true);
-    }
+    gevr_capture_target_ensure(gVrMenuPFb, (uint32_t)vr_get_internal_render_width(),
+                               (uint32_t)vr_get_internal_render_height());
 
     if (gVrMenuPCaptureDepth++ > 0) {
         return;

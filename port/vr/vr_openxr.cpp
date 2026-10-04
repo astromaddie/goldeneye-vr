@@ -1422,13 +1422,13 @@ static bool vr_menu_copy_init()
     static const char* fsSrc =
             "#version 300 es\n"
             "precision highp float;\n"
-            "uniform sampler2D uTex;\n"
+            "uniform highp sampler2DArray uTex;\n"   /* a HUD capture's two-view target: its image is layer 0 */
             "out vec4 o;\n"
             "vec3 srgb_to_linear(vec3 c) {\n"
             "    return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));\n"
             "}\n"
             "void main() {\n"
-            "    vec4 c = texelFetch(uTex, ivec2(gl_FragCoord.xy), 0);\n"
+            "    vec4 c = texelFetch(uTex, ivec3(ivec2(gl_FragCoord.xy), 0), 0);\n"
             "    vec3 straight = (c.a > 0.0) ? clamp(c.rgb / c.a, 0.0, 1.0) : vec3(0.0);\n"
             "    o = vec4(srgb_to_linear(straight) * c.a, c.a);\n"   // re-prémultiplié en linéaire
             "}\n";
@@ -1467,6 +1467,8 @@ static bool vr_menu_copy_init()
 }
 #endif
 
+// srcTex: a HUD capture (gfx_opengl.cpp gevr_capture_target_ensure), a two-layer array whose
+// image is layer 0
 static void vr_copy_menu_layer(GLuint srcTex, GLuint dstTex, GLuint& srcFbo, GLuint& dstFbo)
 {
     if (!dstFbo) glGenFramebuffers(1, &dstFbo);
@@ -1483,7 +1485,7 @@ static void vr_copy_menu_layer(GLuint srcTex, GLuint dstTex, GLuint& srcFbo, GLu
         glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVao);
         glGetIntegerv(GL_ACTIVE_TEXTURE, &prevActive);
         glActiveTexture(GL_TEXTURE0);
-        glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTex);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &prevTex);
         glGetIntegerv(GL_VIEWPORT, vp);
 
         glDisable(GL_SCISSOR_TEST);
@@ -1492,10 +1494,10 @@ static void vr_copy_menu_layer(GLuint srcTex, GLuint dstTex, GLuint& srcFbo, GLu
 
         glUseProgram(s_menuCopyProg);
         glBindVertexArray(s_menuCopyVao);
-        glBindTexture(GL_TEXTURE_2D, srcTex);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, srcTex);
         glDrawArrays(GL_TRIANGLES, 0, 3);
 
-        glBindTexture(GL_TEXTURE_2D, (GLuint)prevTex);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, (GLuint)prevTex);
         glActiveTexture((GLenum)prevActive);
         glBindVertexArray((GLuint)prevVao);
         glUseProgram((GLuint)prevProg);
@@ -1512,7 +1514,7 @@ static void vr_copy_menu_layer(GLuint srcTex, GLuint dstTex, GLuint& srcFbo, GLu
 
     // Chemin d'origine (PC, ou Android si le runtime n'offre pas SRGB8_ALPHA8)
     glBindFramebuffer(GL_READ_FRAMEBUFFER, srcFbo);
-    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, srcTex, 0);
+    glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, srcTex, 0, 0);
 
     glClearColor(0.f, 0.f, 0.f, 0.f);
     glClear(GL_COLOR_BUFFER_BIT);
@@ -1535,7 +1537,7 @@ static void vr_menu_layer_diag(const char* name, GLuint srcTex)
     snprintf(where, sizeof(where), "the HUD layer copy (%s)", name);
     gevrGlProbe(where);
 #ifdef GEVR_STEAM_FRAME
-    vrFrameHudDump(name, srcTex, -1, (int)g_menuSwapchainWidth, (int)g_menuSwapchainHeight);
+    vrFrameHudDump(name, srcTex, 0, (int)g_menuSwapchainWidth, (int)g_menuSwapchainHeight);
 #else
     (void)srcTex;
 #endif
