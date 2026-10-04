@@ -19,6 +19,9 @@ static int s_hudmsg_count, s_lobby_stops, s_launcher_restarts;
 void hudmsgTopShow(char *mess) { (void)mess; s_hudmsg_count++; }
 void gevrLobbySessionStopped(void) { s_lobby_stops++; }
 void gevrRestartToLauncher(void) { s_launcher_restarts++; }
+/* the Steam Frame build leaves to the title screen instead (port/vr/vr_launcher.cpp) */
+void gevrFrameBackToTitle(const char *notice) { (void)notice; s_launcher_restarts++; }
+struct player_data g_playerPlayerData[4];
 ENetPacket *enet_packet_create(const void *data, size_t size, uint32_t flags) {
     ENetPacket *p = calloc(1, sizeof(*p));
     p->data = malloc(size); memcpy(p->data, data, size); p->dataLength = size; p->flags = flags;
