@@ -20,6 +20,7 @@
 #include "vr_cinema_math.h"
 #include "vr_diag.h"
 #include "vr_frame.h"
+#include "vr_settings.h"
 
 extern "C" long long gevrVrQuadSwapchainFormat(void);   // vr_openxr.cpp: the virtual screen's format
 extern "C" long long gevrVrDisplayTimeNs(void);         // vr_openxr.cpp: this XR frame's display time
@@ -76,10 +77,13 @@ static float s_lastFov[2][4];
 
 /* ------------------------------------------------------------------------------- game side */
 
+// half the cameras' separation: vr-diag.ini cinema_sep_mm for a test run, else 64 mm times the
+// VR settings' Cinema depth (CinemaDepth, 50..150 %), read every game frame so it applies at once
 static float cinema_half_sep_m(void)
 {
     const float mm = gevrDiag()->cinema_sep_mm;
-    return 0.5f * (mm > 0.0f ? mm * 0.001f : GEVR_CINEMA_SEP_M);
+    return 0.5f * (mm > 0.0f ? mm * 0.001f
+                             : GEVR_CINEMA_SEP_M * (float)vrSettingsClampCinemaDepth(VrCinemaDepth) / 100.0f);
 }
 
 extern "C" void gevrVrCinema(int state, float unitsPerMetre, int cameraMode)

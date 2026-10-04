@@ -56,10 +56,12 @@ int gevrCinemaEyeFov(const GevrCinemaScreen *s, const float eye[3], float fov[4]
     if (!(ez >= 0.1f)) {
         return 0;
     }
-    fov[0] = atan2f(-halfW - ex, ez);   /* left */
-    fov[1] = atan2f(halfW - ex, ez);    /* right */
-    fov[2] = atan2f(halfH - ey, ez);    /* up */
-    fov[3] = atan2f(-halfH - ey, ez);   /* down */
+    /* atan2 in double: the game links its own atan2f (src/game/math_atan2f.c, 0..2pi, as on the
+     * N64) over libm's, which gave the left and down angles as 2pi - a (5.83 rad seen on the Frame) */
+    fov[0] = (float)atan2(-halfW - ex, ez);   /* left */
+    fov[1] = (float)atan2(halfW - ex, ez);    /* right */
+    fov[2] = (float)atan2(halfH - ey, ez);    /* up */
+    fov[3] = (float)atan2(-halfH - ey, ez);   /* down */
     return 1;
 }
 

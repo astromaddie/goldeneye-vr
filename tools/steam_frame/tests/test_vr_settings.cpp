@@ -67,6 +67,7 @@ struct Values {
     float fov, dist, snap, vignette, sway, throwStrength, throwPitch, gaze;
     float renderScale;
     int msaa;
+    int cinemaDepth;
     unsigned long long cheats;
     float gunOff[3], grip[2][6];
     int hapticI, hapticMs;
@@ -87,6 +88,7 @@ static void put(const Values &v)
     VrRenderScale = v.renderScale;
     VrMsaa = v.msaa;
     VrCutsceneMode = v.cutscenes;
+    VrCinemaDepth = v.cinemaDepth;
     VrSwayStrength = v.sway;
     VrMotionThrowing = v.motionThrow != 0;
     VrMotionThrowStrength = v.throwStrength;
@@ -126,6 +128,7 @@ static void expect(const Values &v, const char *when)
     EXPECT(near(VrRenderScale, v.renderScale), "RenderScale");
     EXPECT(VrMsaa == v.msaa, "EyeMsaa");
     EXPECT(VrCutsceneMode == v.cutscenes, "CutsceneMode");
+    EXPECT(VrCinemaDepth == v.cinemaDepth, "CinemaDepth");
     EXPECT(near(VrSwayStrength, v.sway), "SwayStrength");
     EXPECT((VrMotionThrowing ? 1 : 0) == v.motionThrow, "MotionThrowing");
     EXPECT(near(VrMotionThrowStrength, v.throwStrength), "MotionThrowStrength");
@@ -171,18 +174,19 @@ int main()
     CHECK(VrWatchStyle == 1, "WatchStyle: the Frame's default is the Q-Branch terminal");
     CHECK(near(VrRenderScale, GEVR_FRAME_RENDER_SCALE) && VrMsaa == GEVR_FRAME_MSAA, "RenderScale, EyeMsaa: the Frame's defaults");
     CHECK(VrCutsceneMode == VR_CUTSCENES_CINEMA_3D, "CutsceneMode: the Frame's default is the 3D cinema");
+    CHECK(VrCinemaDepth == 100, "CinemaDepth: 100% (64 mm) by default");
 
     // Two full sets of values, every one different from the other and from the defaults, at the
     // precision the file keeps. Smooth turning and a vignette/sway of 0 are covered by set B.
     const Values a = { 1, 1, 120, 0, 0, 0, 1, 1, 1, 1, 2, 1, 0, 0,
                        85.0f, 3.25f, 45.0f, 0.70f, 0.35f, 1.75f, -12.5f, 0.85f,
-                       1.25f, 4,
+                       1.25f, 4, 150,
                        0x0000000180004004ULL,
                        { 1.25f, -0.5f, -10.75f }, { { 1, 2, 3, 4.5f, 5.5f, 6.5f }, { -1, -2, -3, -4.5f, 0, 90 } },
                        7, 120 };
     const Values b = { 0, 0, 72, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1,
                        40.0f, 1.5f, 0.0f, 0.0f, 0.0f, 0.5f, 20.0f, 0.0f,
-                       0.75f, 2,
+                       0.75f, 2, 60,
                        0ULL,
                        { 3.0f, 2.0f, -14.0f }, { { 0, 0, 0, 0, 0, 0 }, { 0.5f, 0.5f, 0.5f, 10, 20, 30 } },
                        2, 40 };
@@ -222,6 +226,15 @@ int main()
     CHECK(VrScreenCurved == 1, "ScreenCurved=1.0");
     CHECK(VrWatchStyle == 0, "WatchStyle=0.0");
     CHECK(VrCutsceneMode == VR_CUTSCENES_FLAT, "CutsceneMode=0.0");
+    writeIni("[VR]\nCinemaDepth=250\n");
+    vrSettingsLoad();
+    CHECK(VrCinemaDepth == 150, "CinemaDepth=250 clamped to 150");
+    writeIni("[VR]\nCinemaDepth=75.0\n");
+    vrSettingsLoad();
+    CHECK(VrCinemaDepth == 75, "CinemaDepth=75.0 (a decimal)");
+    writeIni("[VR]\nCinemaDepth=10\n");
+    vrSettingsLoad();
+    CHECK(VrCinemaDepth == 50, "CinemaDepth=10 clamped to 50");
     CHECK(near(VrGunOffX, 2.0f) && near(VrGunOffY, 1.0f) && near(VrGunOffZ, -11.0f), "GunOffX/Y/Z as integers");
 
     // RenderScale and EyeMsaa: hand-written spellings, out-of-range values clamped, and the early

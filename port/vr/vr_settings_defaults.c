@@ -96,6 +96,8 @@ int VrCutsceneMode = 1;
 #else
 int VrCutsceneMode = 0;
 #endif
+/* The 3D cinema's separation, percent of 64 mm (VR_CINEMA_DEPTH_MIN..MAX). */
+int VrCinemaDepth = 100;
 
 /* --- Physical setup ------------------------------------------------------ */
 

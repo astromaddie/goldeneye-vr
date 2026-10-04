@@ -2449,6 +2449,19 @@ static void gevrSettingsColumns(bool inGame, int *mode, GevrComfortChoice &comfo
                 ImGui::SetTooltip("Cutscenes flat on the virtual screen, as before.");
             }
             VrCutsceneMode = cut;
+            // The cinema's depth (CinemaDepth): its two cameras' separation, 100% = 64 mm.
+            int depth = vrSettingsClampCinemaDepth(VrCinemaDepth);
+            ImGui::BeginDisabled(cut == 0);
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            if (ImGui::SliderInt("##CinemaDepth", &depth, VR_CINEMA_DEPTH_MIN, VR_CINEMA_DEPTH_MAX, "Cinema depth %d%%")) {
+                VrCinemaDepth = vrSettingsClampCinemaDepth(depth);
+            }
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip("How deep the 3D cinema looks: the two cameras' separation.\n"
+                                  "100%% is 64 mm, an average pair of eyes; more is deeper.\n"
+                                  "The far hills never go past 3/4 of your eyes' distance apart.");
+            }
         }
 #endif
         ImGui::Spacing();

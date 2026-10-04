@@ -126,6 +126,8 @@ extern "C" void vrSettingsSave(void)
     fprintf(f, "; In-engine cutscenes (Steam Frame): 1 = a 3D cinema screen 3 m ahead, with stereo depth;\n");
     fprintf(f, "; 0 = flat on the virtual screen. From the next cutscene.\n");
     fprintf(f, "CutsceneMode=%d\n", VrCutsceneMode);
+    fprintf(f, "; The 3D cinema's depth: its two cameras' separation, percent of 64 mm (50 to 150).\n");
+    fprintf(f, "CinemaDepth=%d\n", VrCinemaDepth);
 
     // --- VR hand placement (no menu UI; edit here) --------------------------------------------
     fprintf(f, "\n");
@@ -225,6 +227,7 @@ static bool vrSettingsLoadInt(const char *key, int ival)
     else if (strcmp(key, "WatchStyle") == 0) VrWatchStyle = ival != 0 ? 1 : 0;
     else if (strcmp(key, "EyeMsaa") == 0) VrMsaa = vrSettingsClampMsaa(ival);
     else if (strcmp(key, "CutsceneMode") == 0) VrCutsceneMode = ival != 0 ? VR_CUTSCENES_CINEMA_3D : VR_CUTSCENES_FLAT;
+    else if (strcmp(key, "CinemaDepth") == 0) VrCinemaDepth = vrSettingsClampCinemaDepth(ival);
     /* DisplayHz replaces RefreshRate, whose 120 was only ever the old default
      * (no option set it): the new default, 90, applies to existing installs. */
     else if (strcmp(key, "DisplayHz") == 0) VrRefreshRate = ival < 0 ? 0 : ival;
@@ -284,6 +287,7 @@ static bool vrSettingsLoadFloat(const char *key, float fval, int *gunOffRead, fl
     else if (strcmp(key, "WatchStyle") == 0) VrWatchStyle = fval != 0.0f ? 1 : 0;
     else if (strcmp(key, "RenderScale") == 0) VrRenderScale = vrSettingsClampRenderScale(fval);
     else if (strcmp(key, "CutsceneMode") == 0) VrCutsceneMode = fval != 0.0f ? VR_CUTSCENES_CINEMA_3D : VR_CUTSCENES_FLAT;
+    else if (strcmp(key, "CinemaDepth") == 0) VrCinemaDepth = vrSettingsClampCinemaDepth((int)lroundf(fval));
     else if (strcmp(key, "SwayStrength") == 0) {
         if (fval < 0.0f) fval = 0.0f;
         if (fval > 1.0f) fval = 1.0f;
@@ -340,6 +344,15 @@ extern "C" float vrSettingsClampRenderScale(float scale)
     if (scale < RENDER_SCALE_MIN) return RENDER_SCALE_MIN;
     if (scale > RENDER_SCALE_MAX) return RENDER_SCALE_MAX;
     return scale;
+}
+
+// CinemaDepth: 50..150 percent; 0 or junk is the default, 100.
+extern "C" int vrSettingsClampCinemaDepth(int pct)
+{
+    if (pct <= 0) return 100;
+    if (pct < VR_CINEMA_DEPTH_MIN) return VR_CINEMA_DEPTH_MIN;
+    if (pct > VR_CINEMA_DEPTH_MAX) return VR_CINEMA_DEPTH_MAX;
+    return pct;
 }
 
 // EyeMsaa: 1, 2 or 4 samples (3 rounds down; above 4 is 4).

@@ -75,6 +75,19 @@ int vrSettingsClampMsaa(int samples);
 #define VR_CUTSCENES_FLAT 0
 #define VR_CUTSCENES_CINEMA_3D 1
 extern int VrCutsceneMode;
+// The 3D cinema's depth (Frame build): its camera separation as a percentage of the standard 64 mm,
+// 50..150, default 100 (port-specific key `cinema_depth`). The far field stays within 3/4 of the
+// eyes' distance whatever this asks (vr_cinema_math.h GEVR_CINEMA_FAR_MAX), about 126% at 60 degrees.
+#define VR_CINEMA_DEPTH_MIN 50
+#define VR_CINEMA_DEPTH_MAX 150
+extern int VrCinemaDepth;
+#ifdef __cplusplus
+extern "C" {
+#endif
+int vrSettingsClampCinemaDepth(int pct);
+#ifdef __cplusplus
+}
+#endif
 
 // Your standing EYE height in cm -- where your eyes are off the floor, roughly
 // 13 cm below the top of your head, not your stature. That is what the headset
