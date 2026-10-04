@@ -40,6 +40,16 @@ done
     "$here/test_vr_cinema.c" "$root/port/vr/vr_cinema_math.c" "$root/port/vr/vr_screen_math.c" -lm -o "$out/test_vr_cinema"
 "$out/test_vr_cinema"
 
+# upright quads (port/vr/vr_upright_math.c): billboards, the 3D sight and the HUD quads keep world up
+"$cc" -std=c11 -Wall -Wextra -Werror -I"$root/port/vr" \
+    "$here/test_vr_upright.c" "$root/port/vr/vr_upright_math.c" -lm -o "$out/test_vr_upright"
+"$out/test_vr_upright"
+
+# the scope lens as optics (port/vr/vr_scope_math.c): a collimated image on the gun's axis, per-eye windows
+"$cc" -std=c11 -Wall -Wextra -Werror -I"$root/port/vr" \
+    "$here/test_vr_scope.c" "$root/port/vr/vr_scope_math.c" -lm -o "$out/test_vr_scope"
+"$out/test_vr_scope"
+
 # goldeneye-vr.ini: every key the in-game VR settings change, save -> load (port/vr/vr_settings.cpp,
 # vr_settings_defaults.c, vr_haptics.cpp, vr_log.c: the production files)
 "$cc" -std=c11 -Wall -Wextra -DGEVR_STEAM_FRAME=1 -I"$root/include" -I"$root/port/include" \
