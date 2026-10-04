@@ -260,8 +260,8 @@ States: **played in headset**, **verified unattended**, **not started**.
 | Quit to Steam | built, not started on device |
 | Menu laser pointer from the aim pose (Frame build) | built, not yet run on the device. Worn report 2026-10-03 on the first build: the pointer did not line up with the controller (it pointed along the grip pose's -Y, tuned on Touch) |
 | Worn: scale, HUD distance, comfort, control labels | first wear 2026-10-03 on the phase-1 build (no Frame profile): the menu pointer was off; nothing else reported yet |
-| Even movement: body drawn between ticks at display time, even walking speed, no run boost | built, not yet run on the device (host-tested) |
-| Smooth stairs: eased steps up and down, no landing dip | built, not yet run on the device (host-tested) |
+| Even movement: body drawn between ticks at display time, even walking speed, no run boost | verified unattended (2026-10-04, 90 Hz, Dam, `diag_walk`): `[vr-move]` steady-speed windows step a constant 5.67 cm a frame (sd 0.00) at 509 cm/s; 90 fps, 0 missed. Not worn |
+| Smooth stairs: eased steps up and down, no landing dip | built, ran on the device without errors (Dam's start has no stairs, so the easing itself is host-tested only). Not worn |
 | Walking sway and stair bob (experimental, off by default) | built, not yet run on the device (host-tested) |
 | `[vr-move]`, `diag_walk`, `diag_turn` | built, not yet run on the device |
 | Depth submission, foveation, HUD quad, roomscale acceptance, spatial audio | not started |
