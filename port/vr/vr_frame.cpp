@@ -240,10 +240,15 @@ extern "C" void vrFrameScopeDumpLens(int hand, unsigned image, int w, int h, con
     unsigned lit = 0;
     GLenum err = GL_NO_ERROR;
     if (s_scopeDumpStage != 1 || hand != s_scopeDumpHand) return;
-    const bool ok = dump_texture("vr-scope-lens.bmp", image, -1, w, h, &lit, &err);
-    char line[768];
-    snprintf(line, sizeof(line), "%s lens_dump=%s read_error=0x%x lens_lit_pct=%u", state,
-             ok ? "vr-scope-lens.bmp" : "failed", err, lit);
+    /* the scope's projection layer: each eye's window, layers 0 (left) and 1 (right) */
+    unsigned lit1 = 0;
+    GLenum err1 = GL_NO_ERROR;
+    const bool ok0 = dump_texture("vr-scope-lens0.bmp", image, 0, w, h, &lit, &err);
+    const bool ok1 = dump_texture("vr-scope-lens1.bmp", image, 1, w, h, &lit1, &err1);
+    const bool ok = ok0 && ok1;
+    char line[1024];
+    snprintf(line, sizeof(line), "%s lens_dump=%s read_error=0x%x/0x%x lens_lit_pct=%u/%u", state,
+             ok ? "vr-scope-lens0.bmp,vr-scope-lens1.bmp" : "failed", err, err1, lit, lit1);
     scope_txt("a", line);
     s_scopeDumpStage = 2;
 }
@@ -253,7 +258,7 @@ extern "C" void vrFrameScopeNote(int hand, const char *line)
     if (s_scopeDumpStage != 2 || hand != s_scopeDumpHand) return;
     scope_txt("a", line);
     s_scopeDumpStage = 3;
-    FLOG("[vr-dump] scope dump complete: vr-dumps/vr-scope.bmp, vr-scope-lens.bmp, vr-scope.txt");
+    FLOG("[vr-dump] scope dump complete: vr-dumps/vr-scope.bmp, vr-scope-lens0/1.bmp, vr-scope.txt");
 }
 
 /* ------------------------------------------------------------ dump_hud */

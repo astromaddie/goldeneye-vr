@@ -1409,6 +1409,9 @@ static bool vr_create_menu_swapchain()
     // Without one that scope just doesn't show; the menus above still work.
     swapchainInfo.width  = GEVR_SCOPE_RES;
     swapchainInfo.height = GEVR_SCOPE_RES;
+#ifdef GEVR_STEAM_FRAME
+    swapchainInfo.arraySize = 2;   // a projection layer: each eye's window into the scope (vr_scope_math.h)
+#endif
     for (int hand = 0; hand < 2; hand++) {
         if (XR_FAILED(xrCreateSwapchain(g_vrState.session, &swapchainInfo, &g_scopeSwapchain[hand]))) {
             LOGE("xrCreateSwapchain (scope, hand %d) failed (format=0x%llx)", hand, (unsigned long long)chosenFormat);
@@ -1666,7 +1669,7 @@ static void vr_update_menu_swapchain_P()
  * buffers' do. Converting them to linear first, as the menu copy does, left
  * the lens very dark (user).
  */
-#ifdef ANDROID
+#if defined(ANDROID) && !defined(GEVR_STEAM_FRAME)   // the Frame build: vr_scope_eye_copy_init below
 static GLuint s_scopeCopyProg = 0;
 static GLint  s_scopeCopySrgbLoc = -1;
 static bool   s_scopeCopyFailed = false;
@@ -1735,6 +1738,7 @@ static bool vr_scope_copy_init()
 }
 #endif
 
+#ifndef GEVR_STEAM_FRAME   // the Frame build: vr_update_scope_swapchain_eyes below
 static void vr_update_scope_swapchain(int hand, GLuint srcTex)
 {
     uint32_t imageIndex = 0;
@@ -1784,17 +1788,6 @@ static void vr_update_scope_swapchain(int hand, GLuint srcTex)
         if (prevScissor) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
         if (prevDepth)   glEnable(GL_DEPTH_TEST);   else glDisable(GL_DEPTH_TEST);
     }
-#ifdef GEVR_STEAM_FRAME
-    if (vrFrameScopeLensDue(hand)) {
-        // vr-diag.ini dump_scope: the lens image the compositor gets, as just written
-        char st[256];
-        const GLenum err = glGetError();
-        snprintf(st, sizeof(st), "composite: copy ran=%d src_tex=%u (layer 0) swapchain_image=%u index=%u copy_error=0x%x srgb_convert=%d",
-                 s_scopeCopyProg != 0 ? 1 : 0, srcTex, g_scopeSwapchainImages[hand][imageIndex].image, imageIndex, err,
-                 (g_menuSwapchainIsSrgb && !g_srgbWritesRaw) ? 1 : 0);
-        vrFrameScopeDumpLens(hand, g_scopeSwapchainImages[hand][imageIndex].image, GEVR_SCOPE_RES, GEVR_SCOPE_RES, st);
-    }
-#endif
 #else
     {
         static GLuint srcFbo = 0;
@@ -1813,6 +1806,159 @@ static void vr_update_scope_swapchain(int hand, GLuint srcTex)
     XrSwapchainImageReleaseInfo releaseInfo = {XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
     xrReleaseSwapchainImage(g_scopeSwapchain[hand], &releaseInfo);
 }
+#endif
+
+#ifdef GEVR_STEAM_FRAME
+/*
+ * The scope as optics (Steam Frame build; vr_scope_math.h): each eye's layer of the scope's
+ * projection layer is that eye's window into the one scope image. Texel q (-1..1 across the
+ * window's box) is tangent uCenter + q uRad in the scope's axis frame; inside the eyepiece's circle
+ * it shows the image at that tangent (texcoord tangent / uField, as gevrScopeEyeTexcoord), past the
+ * field the dark glass; outside the circle it is transparent. A thin darker rim as before.
+ */
+static GLuint s_scopeEyeProg = 0;
+static GLint s_scopeEyeLoc[5] = { -1, -1, -1, -1, -1 };   // uCenter, uRad, uField, uValid, uSrgb
+static bool s_scopeEyeFailed = false;
+
+static bool vr_scope_eye_copy_init()
+{
+    if (s_scopeEyeProg) return true;
+    if (s_scopeEyeFailed) return false;
+    static const char* vsSrc =
+            "#version 300 es\n"
+            "const vec2 pos[3] = vec2[3](vec2(-1.0,-1.0), vec2(3.0,-1.0), vec2(-1.0,3.0));\n"
+            "void main() { gl_Position = vec4(pos[gl_VertexID], 0.0, 1.0); }\n";
+    static const char* fsSrc =
+            "#version 300 es\n"
+            "precision highp float;\n"
+            "uniform highp sampler2DArray uTex;\n"   /* the scope's two-view target: its image is layer 0 */
+            "uniform vec2 uCenter;\n"
+            "uniform float uRad;\n"
+            "uniform float uField;\n"
+            "uniform int uValid;\n"
+            "uniform int uSrgb;\n"
+            "out vec4 o;\n"
+            "void main() {\n"
+            "    const float size = 512.0;\n"
+            "    vec2 q = gl_FragCoord.xy / size * 2.0 - 1.0;\n"
+            "    float r = length(q);\n"
+            "    float px = 2.0 / size;\n"
+            "    float a = 1.0 - smoothstep(1.0 - 2.0 * px, 1.0, r);\n"
+            "    if (uValid == 0 || a <= 0.0) { o = vec4(0.0); return; }\n"
+            "    vec2 t = uCenter + q * uRad;\n"
+            "    float fr = length(t) / uField;\n"
+            "    vec3 c = texture(uTex, vec3(t / uField * 0.5 + 0.5, 0.0)).rgb;\n"
+            "    float edge = 2.0 * px * uRad / uField;\n"
+            "    c = mix(vec3(0.02, 0.025, 0.03), c, 1.0 - smoothstep(1.0 - edge, 1.0, fr));\n"
+            "    c *= 1.0 - 0.6 * smoothstep(0.9, 1.0, r);\n"
+            "    if (uSrgb == 1) c = mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));\n"
+            "    o = vec4(c * a, a);\n"
+            "}\n";
+    auto compile = [](GLenum type, const char* src) -> GLuint {
+        GLuint s = glCreateShader(type);
+        glShaderSource(s, 1, &src, nullptr);
+        glCompileShader(s);
+        GLint ok = 0; glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
+        if (!ok) {
+            char log[512]; glGetShaderInfoLog(s, sizeof(log), nullptr, log);
+            LOGE("scope eye copy shader compile error: %s", log);
+            glDeleteShader(s); return 0;
+        }
+        return s;
+    };
+    GLuint vs = compile(GL_VERTEX_SHADER, vsSrc);
+    GLuint fs = compile(GL_FRAGMENT_SHADER, fsSrc);
+    if (!vs || !fs) { s_scopeEyeFailed = true; return false; }
+    GLuint p = glCreateProgram();
+    glAttachShader(p, vs); glAttachShader(p, fs);
+    glLinkProgram(p);
+    glDeleteShader(vs); glDeleteShader(fs);
+    GLint ok = 0; glGetProgramiv(p, GL_LINK_STATUS, &ok);
+    if (!ok) { LOGE("scope eye copy program link failed"); glDeleteProgram(p); s_scopeEyeFailed = true; return false; }
+    GLint prevProg = 0;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &prevProg);
+    glUseProgram(p);
+    glUniform1i(glGetUniformLocation(p, "uTex"), 0);
+    glUseProgram((GLuint)prevProg);
+    static const char* const names[5] = { "uCenter", "uRad", "uField", "uValid", "uSrgb" };
+    for (int i = 0; i < 5; i++) s_scopeEyeLoc[i] = glGetUniformLocation(p, names[i]);
+    s_scopeEyeProg = p;
+    return true;
+}
+
+// Each eye's window into the scope image, into layers 0 and 1 of the hand's swapchain image.
+static void vr_update_scope_swapchain_eyes(int hand, GLuint srcTex, const GevrScopeEyeView eyes[2], float field)
+{
+    uint32_t imageIndex = 0;
+    XrSwapchainImageAcquireInfo acquireInfo = {XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+    if (XR_FAILED(xrAcquireSwapchainImage(g_scopeSwapchain[hand], &acquireInfo, &imageIndex))) {
+        return;
+    }
+    XrSwapchainImageWaitInfo waitInfo = {XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+    waitInfo.timeout = XR_INFINITE_DURATION;
+    xrWaitSwapchainImage(g_scopeSwapchain[hand], &waitInfo);
+    const GLuint image = g_scopeSwapchainImages[hand][imageIndex].image;
+    vrFrameNoteImage((uint64_t)(uintptr_t)g_scopeSwapchain[hand], image);
+
+    static GLuint dstFbo = 0;
+    if (!dstFbo) glGenFramebuffers(1, &dstFbo);
+    GLint prevDraw = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDraw);
+    if (vr_scope_eye_copy_init()) {
+        GLint prevProg = 0, prevVao = 0, prevTex = 0, prevActive = 0, vp[4];
+        const GLboolean prevBlend = glIsEnabled(GL_BLEND);
+        const GLboolean prevScissor = glIsEnabled(GL_SCISSOR_TEST);
+        const GLboolean prevDepth = glIsEnabled(GL_DEPTH_TEST);
+        glGetIntegerv(GL_CURRENT_PROGRAM, &prevProg);
+        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVao);
+        glGetIntegerv(GL_ACTIVE_TEXTURE, &prevActive);
+        glActiveTexture(GL_TEXTURE0);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &prevTex);
+        glGetIntegerv(GL_VIEWPORT, vp);
+        glDisable(GL_SCISSOR_TEST);
+        glDisable(GL_BLEND);
+        glDisable(GL_DEPTH_TEST);
+        glViewport(0, 0, GEVR_SCOPE_RES, GEVR_SCOPE_RES);
+        glUseProgram(s_scopeEyeProg);
+        glUniform1i(s_scopeEyeLoc[4], (g_menuSwapchainIsSrgb && !g_srgbWritesRaw) ? 1 : 0);
+        glUniform1f(s_scopeEyeLoc[2], field);
+        if (!s_menuCopyVao) glGenVertexArrays(1, &s_menuCopyVao);
+        glBindVertexArray(s_menuCopyVao);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, srcTex);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dstFbo);
+        for (int e = 0; e < 2; e++) {
+            glFramebufferTextureLayer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, image, 0, e);
+            glUniform2f(s_scopeEyeLoc[0], eyes[e].center[0], eyes[e].center[1]);
+            glUniform1f(s_scopeEyeLoc[1], eyes[e].visible ? eyes[e].radius : 0.01f);
+            glUniform1i(s_scopeEyeLoc[3], eyes[e].visible ? 1 : 0);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+        }
+        glFramebufferTextureLayer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, 0, 0, 0);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, (GLuint)prevTex);
+        glActiveTexture((GLenum)prevActive);
+        glBindVertexArray((GLuint)prevVao);
+        glUseProgram((GLuint)prevProg);
+        glViewport(vp[0], vp[1], vp[2], vp[3]);
+        if (prevBlend)   glEnable(GL_BLEND);        else glDisable(GL_BLEND);
+        if (prevScissor) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
+        if (prevDepth)   glEnable(GL_DEPTH_TEST);   else glDisable(GL_DEPTH_TEST);
+    }
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)prevDraw);
+    if (vrFrameScopeLensDue(hand)) {
+        // vr-diag.ini dump_scope: both eyes' windows as the compositor gets them
+        char st[320];
+        const GLenum err = glGetError();
+        snprintf(st, sizeof(st), "composite: per-eye copy ran=%d src_tex=%u (layer 0) swapchain_image=%u index=%u "
+                 "copy_error=0x%x field=%.3f left(%s c=%.3f,%.3f r=%.3f d=%.3f) right(%s c=%.3f,%.3f r=%.3f d=%.3f)",
+                 s_scopeEyeProg != 0 ? 1 : 0, srcTex, image, imageIndex, err, field,
+                 eyes[0].visible ? "sees" : "not", eyes[0].center[0], eyes[0].center[1], eyes[0].radius, eyes[0].depth,
+                 eyes[1].visible ? "sees" : "not", eyes[1].center[0], eyes[1].center[1], eyes[1].radius, eyes[1].depth);
+        vrFrameScopeDumpLens(hand, image, GEVR_SCOPE_RES, GEVR_SCOPE_RES, st);
+    }
+    XrSwapchainImageReleaseInfo releaseInfo = {XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+    xrReleaseSwapchainImage(g_scopeSwapchain[hand], &releaseInfo);
+}
+#endif
 
 // ============================================================================
 // VIRTUAL SCREEN - world-locked quad layer (see vr_screen.h)
@@ -3868,7 +4014,11 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
         if (!warmed && g_scopeSwapchain[0] != XR_NULL_HANDLE) {
             extern void gfx_vr_scope_prepare(void);   // gfx_opengl.cpp
             warmed = true;
+#ifdef GEVR_STEAM_FRAME
+            vr_scope_eye_copy_init();
+#else
             vr_scope_copy_init();
+#endif
             gfx_vr_scope_prepare();
         }
     }
@@ -4091,8 +4241,121 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
             q.w = (m10 - m01) / s; q.x = (m02 + m20) / s; q.y = (m12 + m21) / s; q.z = 0.25f * s;
         }
         menuLayerP.pose.orientation = q;
+#ifdef GEVR_STEAM_FRAME
+        menuLayerP.pose.orientation = uprightFacing(px, py, pz);   // world up, not the head's
+#endif
     }
 
+#ifdef GEVR_STEAM_FRAME
+    // --- The scope (issue #40) as optics (vr_scope_math.h): a projection layer per hand ---
+    // The image is collimated, on the gun's axis: each eye sees it through the eyepiece's circle as
+    // that eye sees it, so the eye looking through the scope has the target and the sight where the
+    // gun points at any distance (wear 2026-10-04: the old lens quad, pushed out along the head's
+    // ray near the eyes, slid right off the aiming eye's line of sight). No near plane to dodge:
+    // a projection layer is drawn from the eye's own pose, however close the eyepiece comes.
+    // One per hand (gevr_scope.h): the game's GUNRIGHT (0) is controller 1, GUNLEFT (1) controller 0.
+    XrCompositionLayerProjection scopeLayer[2] = {{XR_TYPE_COMPOSITION_LAYER_PROJECTION}, {XR_TYPE_COMPOSITION_LAYER_PROJECTION}};
+    XrCompositionLayerProjectionView scopeViews[2][2];
+    bool submitScope[2] = { false, false };
+    {
+        // the eyes in view space, where the lens is placed (the head: between the eyes, the left's turn)
+        const XrPosef &l = g_frameViews[0].pose, &r = g_frameViews[1].pose;
+        const float hp[3] = { (l.position.x + r.position.x) * 0.5f, (l.position.y + r.position.y) * 0.5f,
+                              (l.position.z + r.position.z) * 0.5f };
+        const XrQuaternionf hq = l.orientation;
+        float eyeV[2][3];
+        for (int e = 0; e < 2; e++) {
+            const XrVector3f &ep = g_frameViews[e].pose.position;
+            float vx = ep.x - hp[0], vy = ep.y - hp[1], vz = ep.z - hp[2];
+            rotvec(&vx, &vy, &vz, hq.w, -hq.x, -hq.y, -hq.z);
+            eyeV[e][0] = vx; eyeV[e][1] = vy; eyeV[e][2] = vz;
+        }
+        for (int hand = 0; hand < 2; hand++) {
+            const int ctrl = hand == 0 ? 1 : 0;
+            const GevrScopeState& sc = gevrScope[hand];
+            const GLuint scopeTex = gfx_vr_scope_texture(hand);
+            float gp[3], gq[4];
+            if (g_scopeSwapchain[hand] == XR_NULL_HANDLE || scopeTex == 0 || !gevrVrGripPoseSteady(ctrl, gp, gq)) {
+                continue;
+            }
+            float ra[3], ua[3], ba[3];
+            if (sc.gunValid) {
+                memcpy(gp, sc.gunOrigin, sizeof(gp));
+                memcpy(ra, sc.gunAxes[0], sizeof(ra));
+                memcpy(ua, sc.gunAxes[1], sizeof(ua));
+                memcpy(ba, sc.gunAxes[2], sizeof(ba));
+            } else {
+                // the gun's axes as bondview2.c gevrGunAxes builds them: the grip turned to the aim pose
+                float off[4], g[4];
+                if (gevrVrAimOffset(ctrl, off)) {
+                    gevrGunQuat(gq, off, g);
+                } else {
+                    memcpy(g, gq, sizeof(g));
+                }
+                gevrGripAxesFromQuat(g, ra, ua, ba);
+            }
+            // bondview2.c gevrScopeLensPlace: on the model's eyepiece, mirrored with the gun
+            const float side = sc.lens[0], up = sc.lens[1], back = sc.lens[2];
+            const float lensC[3] = { gp[0] + ua[0] * up + ba[0] * back + ra[0] * side,
+                                     gp[1] + ua[1] * up + ba[1] * back + ra[1] * side,
+                                     gp[2] + ua[2] * up + ba[2] * back + ra[2] * side };
+            const float axis[3] = { -ba[0], -ba[1], -ba[2] };
+            GevrScopeEyeView ev[2];
+            for (int e = 0; e < 2; e++) {
+                gevrScopeEyeAperture(lensC, sc.lens[3] * 0.5f, ra, ua, axis, eyeV[e], &ev[e]);
+            }
+            int nearest = -1;
+            const float field = gevrScopeField(ev, &nearest);
+            if (nearest < 0) {
+                continue;   // neither eye is behind the eyepiece
+            }
+            gevrScope[hand].lensTan = field;   // the game renders the next image over this field
+            const float imageTan = sc.imageTan > 1e-3f ? sc.imageTan : field;
+            vr_update_scope_swapchain_eyes(hand, scopeTex, ev, imageTan);
+            const XrQuaternionf orient = vr_quat_from_basis(ra, ua, ba);   // -Z along the axis, +Y the gun's up
+            for (int e = 0; e < 2; e++) {
+                float ft[4];
+                gevrScopeEyeFovTan(&ev[e], ft);
+                XrCompositionLayerProjectionView &v = scopeViews[hand][e];
+                v = {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW};
+                v.pose.orientation = orient;
+                v.pose.position = { eyeV[e][0], eyeV[e][1], eyeV[e][2] };
+                v.fov.angleLeft = atanf(ft[0]);
+                v.fov.angleRight = atanf(ft[1]);
+                v.fov.angleUp = atanf(ft[2]);
+                v.fov.angleDown = atanf(ft[3]);
+                v.subImage.swapchain = g_scopeSwapchain[hand];
+                v.subImage.imageArrayIndex = (uint32_t)e;
+                v.subImage.imageRect.offset = {0, 0};
+                v.subImage.imageRect.extent = {GEVR_SCOPE_RES, GEVR_SCOPE_RES};
+            }
+            XrCompositionLayerProjection &layerP = scopeLayer[hand];
+            layerP.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+            layerP.space = g_vrState.viewSpace;
+            layerP.viewCount = 2;
+            layerP.views = scopeViews[hand];
+            submitScope[hand] = true;
+            {
+                // vr-diag.ini dump_scope: the layer as submitted, after the lens image
+                char note[320];
+                snprintf(note, sizeof(note), "layer: projection, view space; lens=(%.3f %.3f %.3f) r=%.4f axis=(%.3f %.3f %.3f) "
+                         "field=%.3f image=%.3f nearest=%s; left %s c=(%.3f %.3f) r=%.3f; right %s c=(%.3f %.3f) r=%.3f",
+                         lensC[0], lensC[1], lensC[2], sc.lens[3] * 0.5f, axis[0], axis[1], axis[2], field, imageTan,
+                         nearest == 0 ? "left" : "right", ev[0].visible ? "sees" : "not", ev[0].center[0], ev[0].center[1],
+                         ev[0].radius, ev[1].visible ? "sees" : "not", ev[1].center[0], ev[1].center[1], ev[1].radius);
+                vrFrameScopeNote(hand, note);
+            }
+            static unsigned n[2];
+            if ((n[hand]++ % 180) == 0) {
+                LOGI("scope: hand %d lens at (%.3f %.3f %.3f) m, axis (%.2f %.2f %.2f), field %.3f; the %s eye looks "
+                     "through it (window at %.3f,%.3f r %.3f; other %.3f,%.3f r %.3f %s)%s", hand, lensC[0], lensC[1], lensC[2],
+                     axis[0], axis[1], axis[2], field, nearest == 0 ? "left" : "right", ev[nearest].center[0],
+                     ev[nearest].center[1], ev[nearest].radius, ev[1 - nearest].center[0], ev[1 - nearest].center[1],
+                     ev[1 - nearest].radius, ev[1 - nearest].visible ? "sees" : "behind", VrLeftHandedMode ? ", left-handed" : "");
+            }
+        }
+    }
+#else
     // --- The sniper scope's lens (issue #40): on the gun, to both eyes ---
     // Placed from the gun hand's newest pose (view space), at the lens's
     // offset from the grip along the gun's up/back/right (bondview2.c
@@ -4230,6 +4493,8 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
             }
         }
     }
+
+#endif
 
     // --- Virtual screen (world-locked) ---
     // Once the screen exists it is submitted on every frame, including the

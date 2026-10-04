@@ -28,6 +28,12 @@ typedef struct GevrScopeState
      * N64's zoom did.
      */
     float lensTan;
+    /*
+     * The half-width, as a tangent in the eye, that this frame's image covers (bondview2.c, from
+     * lensTan and the zoom): the Steam Frame's lens copy (vr_openxr.cpp, vr_scope_math.h) maps the
+     * eyes' windows into the image with it, so the mapping always matches the image as rendered.
+     */
+    float imageTan;
 } GevrScopeState;
 
 extern GevrScopeState gevrScope[2];

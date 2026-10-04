@@ -4065,7 +4065,7 @@ static s32 gevrScopeBeginHand(s32 hand)
     f32 pos[3], right[3], up[3], back[3];
     f32 r[3], u[3], f[3];
     f32 vu = GEVR_UNITS_PER_METRE * D_800364CC;
-    f32 len, zoom, fov, g, n, fa, A, B, ro, uo, fo;
+    f32 len, zoom, fov, mag, g, n, fa, A, B, ro, uo, fo;
     f32 zr[2];
     struct coord3d o, d;
     s32 on = FALSE;
@@ -4164,6 +4164,12 @@ static s32 gevrScopeBeginHand(s32 hand)
     zoom = gevrScopeZoom(item);
     fov = zoom * s_gevrScopeK;   /* always zoomed, as a real scope */
     if (fov > 60.0f) fov = 60.0f;
+    /* the N64's magnification: a tangent t in the eye shows the world at t / mag */
+    {
+        f32 tz = tanf(fov * 0.5f * (M_PI_F / 180.0f));
+
+        mag = tz > 1e-6f ? tanf(GEVR_SCOPE_FLAT_FOVY * 0.5f * (M_PI_F / 180.0f)) / tz : 1.0f;
+    }
     if (st->lensTan > 1e-3f)
     {
         /* the N64's magnification: its zoomed view over its normal one */
@@ -4173,6 +4179,7 @@ static s32 gevrScopeBeginHand(s32 hand)
         fov = 2.0f * atanf(t) * (180.0f / M_PI_F);
     }
     if (fov < 0.5f) fov = 0.5f;
+    st->imageTan = mag * tanf(fov * 0.5f * (M_PI_F / 180.0f));
     {
         static f32 loggedZoom[2];
         static u32 n[2];
@@ -4180,7 +4187,7 @@ static s32 gevrScopeBeginHand(s32 hand)
         if ((n[hand]++ % 240) == 0 || fabsf(zoom - loggedZoom[hand]) > 1.0f)
         {
             loggedZoom[hand] = zoom;
-            sysLogPrintf(LOG_NOTE, "stereo: scope (hand %d) zoom %.1f deg (%.1fx): %.2f deg across a %.1f deg lens",
+            sysLogPrintf(LOG_NOTE, "stereo: scope (hand %d) zoom %.1f deg (%.1fx): %.2f deg of world across a %.1f deg field",
                          hand, loggedZoom[hand], tanf(GEVR_SCOPE_FLAT_FOVY * 0.5f * (M_PI_F / 180.0f))
                                      / tanf(loggedZoom[hand] * 0.5f * (M_PI_F / 180.0f)),
                          fov, 2.0f * atanf(st->lensTan) * (180.0f / M_PI_F));
