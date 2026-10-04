@@ -36,7 +36,10 @@ Three layers, as in the playbook:
 Frame-only files: `vr_diag.{h,c}` (vr-diag.ini), `vr_frame.{h,cpp}` (synthetic head, dumps,
 `[vr-perf]`), `vr_system.{h,cpp}` (View layer). Hooks in `vr_openxr.cpp`, `vr_input.cpp`,
 `gfx_pc.cpp`, `input.c`, `bondview2.c`, `main.c`, `boss.c` are all `#ifdef GEVR_STEAM_FRAME`
-(except the null-safe SDL clipboard fix).
+(except the null-safe SDL clipboard fix). Comfort locomotion (`vr_motion.{h,c}`,
+`vr_motion_math.{h,c}`, section 4) is in both builds but behind settings whose Quest defaults are off,
+so the Quest build behaves as before unless its launcher turns them on; its `[vr-move]` line is
+Frame-only.
 
 ### Frame protocol
 
@@ -68,6 +71,7 @@ verified. "Dump" means the unattended eye dumps of section 8.
 | Full-screen fades and damage flash | `gfx_pc.cpp` `gevrStereoViewportFill` | A fill over the letterboxed player viewport is stretched to cover the eye | read |
 | HUD, crosshair, messages | `VR_HUD_CAPTURE_*_H` tags, `tx_HUD` per-eye offset | Drawn in the eye pass with the HUD's own per-eye parallax (not a quad layer yet) | dump (HUD present) |
 | First-person gun, arms, casings | `bondview2.c` `gevrStereoGunMatrix`, `VR_CULL_OFF_*` tags | Placed from the grip pose in view space at the game frame's camera; redraw frames carry them with the hand (`gevrVrRedrawHandDelta`) | read; parked-hand dump |
+| World draws between ticks (even movement, smooth stairs) | `gfx_opengl.cpp` `gfx_vr_eye_live`, `gfx_vr_eye_replay` | The world's draws take the body's move to the frame's display time through the `uReproj` branch; hand-tagged draws keep their hand delta, screen-space HUD markers are skipped | host test of the matrix; not yet on the device |
 | Menus, watch, cutscenes, intro/death cameras | `vr_screen.cpp`, `gevrStereoFrame` `want` | Not stereo: the screen quad, world-locked at 2.5 m | dump (`vr-hud.bmp`) |
 | Effect billboards and hit sparks | `gunfire.c`, `explosion.c` | Hit spark 4 units off the wall, smoke 16 (the game's 26/100 floated) | read (STATUS.md) |
 | Fog | `bgfog.c`, `GEVR_FAR_EXTEND` | Far edge pushed out with the rooms | read |
@@ -89,6 +93,67 @@ Not done on the Frame (no change from the Quest build): depth submission for rep
   again. Switching stereo on, or a new level, takes it as before.
 - Roomscale: head walking moves the body through the game's collision (existing); lean limits as
   upstream (25 cm per tick jump rule). Not changed.
+
+### Comfort locomotion (launcher: COMFORT > Movement...; `port/vr/vr_motion.{h,c}`, math in `vr_motion_math.{h,c}`)
+
+Players reported motion sickness walking with the stick. Three switches, each in `goldeneye-vr.ini`
+and the launcher, so each can be put back:
+
+1. **Even movement** (`EvenMovement`, Frame default on, Quest off).
+   - *Body between ticks.* The body moves on 60 Hz ticks; at 90 Hz walking stepped 22 ms / 11 ms
+     (0, 2, 0, 2... units a frame at walking pace). With it on, the frame pump lays the ticks on the
+     display's own clock (`gevrMotionTickDue`: a tick is due when `predictedDisplayTime` passes the
+     next 60 Hz slot; a stall over 100 ms re-anchors, never fast-forwards), and every XR frame, the
+     game's own and the redraws, shows the body at `(P - tick) / 16.67 ms` of the way from the
+     previous tick to the latest: one tick (16.7 ms) of locomotion latency, none on the head. The
+     head's own walking (roomscale) and the multiplayer menu's head offset are not delayed.
+     Snap turns (over 10 degrees a tick), recentres, teleports (`gevrNotifyTeleport`, or over 75
+     units a tick), stereo coming on (level start, respawn, after a cutscene or the screen) and
+     gaps in the ticks are cuts: the latest tick as drawn.
+   - *How it is drawn.* The game publishes each stereo tick's camera (`bondview2.c`
+     `gevrStereoPublishMotion`: position, world-to-view rotation from `matrix_4x4_set_lookat`,
+     the level's view scale, body yaw, feet and floor heights). Per XR frame `gevrMotionBodyDelta`
+     gives the move from that camera to the shown one in its view space,
+     `c' = A Q A^T c - s A Q dpos` (`gevrBodyDeltaMatrix`). Redraws compose it under the head's
+     move (`gevrVrRedrawDelta x body`); the game frame's own eye pass draws the world through the
+     same `uReproj` vertex-shader branch the redraw uses (`gfx_vr_eye_live`). View-space draws do
+     not take it: what a controller holds (`VR_HAND_DRAW`) keeps its hand delta, or the head's
+     alone, and the HUD, crosshair and screen-space markers are skipped by the shader as before.
+     A body standing still gives the identity, and the eye pass is drawn exactly as before.
+     With any of the three switches on, the CPU's trivial clip reject gets a guard band of 0.06
+     (NDC x w) so triangles culled for the tick's camera do not go missing at the trailing edge of
+     the shown one. Known limit: the crosshair and other screen-space markers do not take the body's
+     move, so on a smooth turn or strafe they can sit up to one tick off the world (at most 2 degrees
+     or one tick's walk); to look at if the wearer notices.
+   - *Even speed.* Bond moves by his walk animation's root motion, which surges every step (the
+     0.93 smoothing leaves about a third of it). `bondhead.c` measures the root displacement per
+     animation frame over whole loops of the walk (frames 9.5-27) and sprint (7.5-17) animations
+     (`gevrGaitObserve`), and in stereo each tick moves by that mean times the frames it advanced
+     (`gevrGaitEven`): the same distance per loop, so the same average speed and level pacing,
+     without the surge. Until a whole loop has been seen (the first half second of walking after
+     boot) the animation's own value is used. The `[vr-move]` line shows the learned ratio.
+   - *No run boost.* The 1.0 to 1.25 speed creep after 3 s of full stick is off in solo stereo;
+     the speed comes from the stick alone. Online it stays, so a match keeps one top speed. This
+     makes a long run in solo play about a fifth slower than the flat game's after 3 s.
+2. **Smooth stairs** (`SmoothStairs`, Frame default on, Quest off). Camera only: the body's
+   physics, collision and eye height for the game are unchanged. Steps up were an IIR (0.83 a tick)
+   and steps down a ballistic micro-fall that stopped dead. Per display frame the shown floor now
+   eases to the floor the feet are going to, up or down alike (critically damped, 90% in about
+   110 ms, never past it), while drops of more than 40 cm, falls faster than 2.5 m/s and lifts
+   track the body (any gap closing in 40 ms); the hand-over carries the speed and stops at the
+   floor, so a landing has no dip. The game's hard-landing dip (`vertical_bounce_adjust`, in
+   `field_88`) is taken out of the shown camera.
+3. **Walking sway, experimental** (`SwayStrength` 0..1, default 0 = off). Side-to-side sway of
+   1.5 cm at full strength and walking speed, one cycle per two 70 cm steps, driven by distance
+   walked (standing still it settles to exactly zero), and a dip of up to 1 cm per 20 cm of height
+   while easing up or down stairs. Added to the shown camera in the same per-frame move.
+
+Host tests: `tools/steam_frame/tests/test_vr_motion.c` (run by `run_tests.sh`) drive the production
+functions: a constant walk through the display-time clock at 72/90/120 Hz has even frame steps (sd 0,
+against 1.1-1.5 units for the latest tick alone), the cuts, the stairs follow (step up and down 90% in
+111 ms each, no overshoot, a 2 m drop followed within 2 units and landing without a dip), the sway and
+bob (zero at strength 0, zero once still), the draw move against a rotated, moved camera, and the gait
+learner (same distance, even speed).
 
 ## 5. Input
 
@@ -141,6 +206,14 @@ the wearer to change (section 10).
 | `boot_stage`, `difficulty` | start in a solo mission (LEVELID, 33 = Dam; 0 agent .. 3 007) without menus |
 | `autostart` | the launcher presses Start after about 2 s |
 | `timing` | `[vr-perf]` GPU ms (`GL_EXT_disjoint_timer_query`, read late, never waited on) |
+| `diag_walk` | stereo play holds the move stick: `1` forward (C-up), `-1` back |
+| `diag_turn` | stereo play turns smoothly at this % of the stick (-100..100), whatever the snap setting |
+
+`[vr-move]` every 2 s while the stereo camera moves: `step_cm mean/max/sd` (the shown camera's
+step per display frame, the head's own motion not included; with even movement the sd should be near
+0, without it about half the mean), `speed_cms` (the stick's speed from the last tick), `f=` (the
+range of the between-ticks fraction; `1.00..1.00` when even movement is off), `clock=display|wall`,
+`stairs=` mode with the frames in each, `h_minus_floor`, `sway`, and `gait=anim:ratio/loops`.
 
 `[vr-perf]` every 10 s (standard line, sfvr formatter) with `sim`, `render`, `redraw`, `end` CPU ms,
 the multiview pass as both `eye=` values, `gpu=` ms when `timing` is on, `missed` (a frame over 1.5 display
@@ -164,7 +237,11 @@ and the docs use. Keys not listed have no standard counterpart.
 | `hud_distance` | `HudDistance` | stereo HUD parallax |
 | `height` | `PlayerHeight`, `MatchCharacterHeight`, `SeatedMode` | |
 | `world_scale` | `WorldScale` | |
-| `force_render`, `diag_yaw`, `dump_frame`, `timing` | `vr-diag.ini` | not in the game's ini |
+| `even_movement` | `EvenMovement` | 0/1; Frame default 1, Quest 0 (port-specific, section 4) |
+| `smooth_stairs` | `SmoothStairs` | 0/1; Frame default 1, Quest 0 (port-specific) |
+| `sway_strength` | `SwayStrength` | 0..1, 0 = off (default); experimental, port-specific |
+| `camera_shake` | none | the game's head bob and sway are off in stereo; `SwayStrength` is an opt-in experiment |
+| `force_render`, `diag_yaw`, `dump_frame`, `timing`, `diag_walk`, `diag_turn` | `vr-diag.ini` | not in the game's ini |
 
 ## 8. Status
 
@@ -183,6 +260,10 @@ States: **played in headset**, **verified unattended**, **not started**.
 | Quit to Steam | built, not started on device |
 | Menu laser pointer from the aim pose (Frame build) | built, not yet run on the device. Worn report 2026-10-03 on the first build: the pointer did not line up with the controller (it pointed along the grip pose's -Y, tuned on Touch) |
 | Worn: scale, HUD distance, comfort, control labels | first wear 2026-10-03 on the phase-1 build (no Frame profile): the menu pointer was off; nothing else reported yet |
+| Even movement: body drawn between ticks at display time, even walking speed, no run boost | built, not yet run on the device (host-tested) |
+| Smooth stairs: eased steps up and down, no landing dip | built, not yet run on the device (host-tested) |
+| Walking sway and stair bob (experimental, off by default) | built, not yet run on the device (host-tested) |
+| `[vr-move]`, `diag_walk`, `diag_turn` | built, not yet run on the device |
 | Depth submission, foveation, HUD quad, roomscale acceptance, spatial audio | not started |
 
 Why "not yet run": after the commit of the diagnostics the Frame dropped off the network at about
