@@ -175,6 +175,12 @@ int main()
     CHECK(near(VrRenderScale, GEVR_FRAME_RENDER_SCALE) && VrMsaa == GEVR_FRAME_MSAA, "RenderScale, EyeMsaa: the Frame's defaults");
     CHECK(VrCutsceneMode == VR_CUTSCENES_CINEMA_3D, "CutsceneMode: the Frame's default is the 3D cinema");
     CHECK(VrCinemaDepth == 100, "CinemaDepth: 100% (64 mm) by default");
+    CHECK(VrRefreshRate == 0, "DisplayHz: the Frame's default is Auto (0: SteamVR's per-app rate)");
+    CHECK(VrRenderScale == 0.0f, "RenderScale: the Frame's default is Auto (0)");
+    CHECK(near(vrSettingsEyeScale(0.0f, 1728) * 1728.0f, 2160.0f, 0.5f), "Auto on the runtime's 1728: 1.25, a 2160 eye");
+    CHECK(near(vrSettingsEyeScale(0.0f, 2160), 1.0f), "Auto with SteamVR's per-app 2160: 1.0");
+    CHECK(near(vrSettingsEyeScale(0.0f, 1000), 2.0f) && near(vrSettingsEyeScale(0.0f, 8000), 0.5f), "Auto clamped to 0.5..2");
+    CHECK(near(vrSettingsEyeScale(1.5f, 2160), 1.5f), "a set scale multiplies the recommendation");
 
     // Two full sets of values, every one different from the other and from the defaults, at the
     // precision the file keeps. Smooth turning and a vignette/sway of 0 are covered by set B.
@@ -208,7 +214,7 @@ int main()
     writeIni("[VR]\n"
              "SnapTurn=45\nComfortVignette=1\nScreenDistance=3\nScreenFov=70\nSwayStrength=1\n"
              "MotionThrowStrength=2\nMotionThrowPitch=-5\nMotionThrowGazeAssist=1\n"
-             "DisplayHz=90.0\nLeftHandedMode=1.0\nAimSteadying=1.0\nEvenMovement=0.0\nScreenCurved=1.0\nWatchStyle=0.0\nCutsceneMode=0.0\n"
+             "DisplayVersion=2\nDisplayHz=90.0\nLeftHandedMode=1.0\nAimSteadying=1.0\nEvenMovement=0.0\nScreenCurved=1.0\nWatchStyle=0.0\nCutsceneMode=0.0\n"
              "GunOffX=2\nGunOffY=1\nGunOffZ=-11\n");
     vrSettingsLoad();
     CHECK(near(VrUseSnapTurn, 45.0f), "SnapTurn=45 (an integer for a float key)");
@@ -239,18 +245,18 @@ int main()
 
     // RenderScale and EyeMsaa: hand-written spellings, out-of-range values clamped, and the early
     // reader the VR session uses before the first frame (vrSettingsReadDisplay) agreeing.
-    writeIni("[VR]\nRenderScale=1\nEyeMsaa=4.0\n");
+    writeIni("[VR]\nDisplayVersion=2\nRenderScale=1\nEyeMsaa=4.0\n");
     vrSettingsLoad();
     CHECK(near(VrRenderScale, 1.0f) && VrMsaa == 4, "RenderScale=1, EyeMsaa=4.0");
-    writeIni("[VR]\nRenderScale=3.5\nEyeMsaa=8\n");
+    writeIni("[VR]\nDisplayVersion=2\nRenderScale=3.5\nEyeMsaa=8\n");
     vrSettingsLoad();
     CHECK(near(VrRenderScale, RENDER_SCALE_MAX) && VrMsaa == 4, "RenderScale=3.5 -> 1.5, EyeEyeMsaa=8 -> 4");
-    writeIni("[VR]\nRenderScale=0.2\nEyeMsaa=3\n");
+    writeIni("[VR]\nDisplayVersion=2\nRenderScale=0.2\nEyeMsaa=3\n");
     vrSettingsLoad();
     CHECK(near(VrRenderScale, RENDER_SCALE_MIN) && VrMsaa == 2, "RenderScale=0.2 -> 0.75, EyeMsaa=3 -> 2");
-    writeIni("[VR]\nRenderScale=0\nEyeMsaa=0\n");
+    writeIni("[VR]\nDisplayVersion=2\nRenderScale=0\nEyeMsaa=0\n");
     vrSettingsLoad();
-    CHECK(near(VrRenderScale, 1.0f) && VrMsaa == 1, "RenderScale=0 -> 1.0, EyeMsaa=0 -> 1");
+    CHECK(VrRenderScale == 0.0f && VrMsaa == 1, "RenderScale=0 -> Auto, EyeMsaa=0 -> 1");
     // "Msaa", the key's name in a test build of 2026-10-04 that saved 1 into the player's file,
     // is not read: the default stands.
     VrMsaa = GEVR_FRAME_MSAA;
@@ -265,6 +271,46 @@ int main()
     VrMsaa = 1;
     vrSettingsReadDisplay();
     CHECK(near(VrRenderScale, 1.25f) && VrMsaa == 2, "vrSettingsReadDisplay reads what vrSettingsSave wrote");
+
+    // The display defaults of 2026-10-05: a file from before (no DisplayVersion) holding the old
+    // defaults takes the new ones once; other values stay; a file with DisplayVersion=2 is as written.
+    writeIni("[VR]\nDisplayHz=90\nRenderScale=1.00\nEyeMsaa=2\n");
+    vrSettingsLoad();
+    CHECK(VrRefreshRate == 0 && near(VrRenderScale, GEVR_FRAME_RENDER_SCALE), "old defaults (90 Hz, 1.00) -> Auto, Auto");
+    VrRenderScale = 1.0f;
+    vrSettingsReadDisplay();
+    CHECK(near(VrRenderScale, GEVR_FRAME_RENDER_SCALE), "the session's early read migrates the scale too");
+    writeIni("[VR]\nDisplayHz=72\nRenderScale=1.50\n");
+    vrSettingsLoad();
+    CHECK(VrRefreshRate == 72 && near(VrRenderScale, 1.5f), "a player's own 72 Hz and 1.5 stay");
+    writeIni("[VR]\nDisplayHz=120\nRenderScale=0.75\n");
+    vrSettingsLoad();
+    CHECK(VrRefreshRate == 120 && near(VrRenderScale, 0.75f), "a player's own 120 Hz and 0.75 stay");
+    VrRefreshRate = 90;
+    VrRenderScale = 1.0f;
+    vrSettingsSave();   // written with DisplayVersion=2: chosen after the change, kept
+    VrRefreshRate = 0;
+    VrRenderScale = 0.0f;
+    vrSettingsLoad();
+    CHECK(VrRefreshRate == 90 && near(VrRenderScale, 1.0f), "90 Hz and 1.00 picked after the change stay (DisplayVersion=2)");
+    VrRenderScale = 0.0f;
+    vrSettingsReadDisplay();
+    CHECK(near(VrRenderScale, 1.0f), "and the early read agrees");
+    VrRefreshRate = 0;
+    vrSettingsSave();
+    VrRefreshRate = 90;
+    vrSettingsLoad();
+    CHECK(VrRefreshRate == 0, "Auto (0) round trip");
+    // DisplayHz values: Auto, the three rates, anything else to the nearest
+    writeIni("[VR]\nDisplayVersion=2\nDisplayHz=144\n");
+    vrSettingsLoad();
+    CHECK(VrRefreshRate == 120, "DisplayHz=144 -> 120");
+    writeIni("[VR]\nDisplayVersion=2\nDisplayHz=60\n");
+    vrSettingsLoad();
+    CHECK(VrRefreshRate == 72, "DisplayHz=60 -> 72");
+    writeIni("[VR]\nDisplayVersion=2\nDisplayHz=-1\n");
+    vrSettingsLoad();
+    CHECK(VrRefreshRate == 0, "DisplayHz=-1 -> Auto");
 
     // Text stays text, and unknown keys are ignored.
     writeIni("[VR]\nActiveTexturePack=2024\nNoSuchKey=3\nNoSuchFloat=1.5\n");

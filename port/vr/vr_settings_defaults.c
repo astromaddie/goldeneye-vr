@@ -76,7 +76,11 @@ int VrEvenMovement = 0;
 int VrSmoothStairs = 0;
 #endif
 float VrSwayStrength = 0.0f;   /* experimental walking sway and stair bob, 0 = off .. 1 */
+#ifdef GEVR_STEAM_FRAME
+int VrRefreshRate = 0;     /* Auto (standard.md section 9): SteamVR's per-app rate (vr_refresh_math.h); or 72, 90, 120 when offered */
+#else
 int VrRefreshRate = 90;    /* Hz (launcher: 72, 90, 120), 0 = the runtime's default (vr_openxr.cpp vr_request_refresh_rate) */
+#endif
 /* The paused watch on the Frame (standard key watch_style): 1 = the Q-Branch terminal (option C,
  * vr_watch_terminal.cpp), 0 = the big screen (option D). The Quest build never reads it. */
 #ifdef GEVR_STEAM_FRAME
@@ -86,7 +90,8 @@ int VrWatchStyle = 0;
 #endif
 /* The eye buffers (standard key resolution_scale; Frame build only): the runtime's recommended
  * size times VrRenderScale (RENDER_SCALE_MIN..MAX), read as the VR session starts; eye MSAA
- * samples, 1 = off, 2 or 4, live. Chosen from measurements in Dam at 90 Hz (VR_ARCHITECTURE.md section 11). */
+ * samples, 1 = off, 2 or 4, live. The default eye is the panel's 2160 (standard.md section 9), chosen with the
+ * frame-time work of 2026-10-05 (VR_ARCHITECTURE.md section 11). */
 float VrRenderScale = GEVR_FRAME_RENDER_SCALE;
 int VrMsaa = GEVR_FRAME_MSAA;
 /* In-engine cutscenes on the Frame (standard key cutscenes): 1 = the 3D cinema (vr_cinema.cpp, the

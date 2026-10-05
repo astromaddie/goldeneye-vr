@@ -60,7 +60,15 @@ typedef struct GevrDiag {
     float diag_zoom;           /* the turn stick held up (+) or down (-) at this % when no controller moves it (the
                                   sniper's zoom while aiming: port/src/input.c), 0 = off */
     int   diag_cinema_draws;   /* on the 3D cinema's Nth pass, a [vr-cinema-draw] line per draw (2D or 3D, w, box) */
+    int   perf_legacy;         /* A/B runs of the frame-time work (VR_ARCHITECTURE.md section 11), a bit mask of the old
+                                  behaviours to bring back: GEVR_PERF_LEGACY_* below; 0 = none (the shipping path) */
 } GevrDiag;
+
+/* perf_legacy bits */
+#define GEVR_PERF_LEGACY_HUD_LAYERS 1   /* a quad swapchain per HUD capture at the eye's size, copied every XR frame */
+#define GEVR_PERF_LEGACY_READBACK   2   /* the ammo panel's box read back with a stalling glReadPixels */
+#define GEVR_PERF_LEGACY_INPUT      4   /* every action state queried every XR frame, not once per game tick */
+#define GEVR_PERF_LEGACY_EMPTY_HUD  8   /* HUD captures submitted even when nothing was drawn into them */
 
 /* The settings; the file is read on the first call. Never NULL. */
 const GevrDiag *gevrDiag(void);

@@ -40,11 +40,14 @@
 #  include "vr_system.h"
 #  include "vr_watch_terminal.h"
 #  include "vr_cinema.h"
+#  include "vr_refresh_math.h"
+#  include "vr_xr_prof.h"
 // goldeneye-vr.ini's eye buffer keys (vr_settings.h, vr_settings_defaults.c)
 extern float VrRenderScale;
 extern int VrMsaa;
 extern "C" void vrSettingsReadDisplay(void);
 extern "C" float vrSettingsClampRenderScale(float scale);
+extern "C" float vrSettingsEyeScale(float renderScale, int recommendedW);
 extern "C" int vrSettingsClampMsaa(int samples);
 #endif
 
@@ -527,13 +530,115 @@ extern int VrRefreshRate;
 static void vr_request_refresh_rate(void);
 /* the launcher's Start (vr_launcher.cpp): the session began before it was shown */
 extern "C" void vr_apply_refresh_rate(void) { vr_request_refresh_rate(); }
+#ifdef GEVR_STEAM_FRAME
+/*
+ * Frame build (standard.md section 9, vr_refresh_math.h): the app can't change the rate. SteamVR runs
+ * a Steam title at its per-app rate (GoldenEyeVR: set to 120 in SteamVR's per-app settings) and offers
+ * only that one. DisplayHz 0 = Auto asks for nothing; 72, 90 or 120 are asked for once, only when the
+ * runtime offers them. The rate actually running is logged from predictedDisplayPeriod
+ * (`[vr] display running at`): XR_FB_display_refresh_rate's list need not show it. If frames aren't
+ * held while worn, a line recommends the per-app rate to set (vr_refresh_window).
+ */
+static GevrRefresh g_refresh;
+
 static void vr_request_refresh_rate(void)
 {
-#ifdef GEVR_STEAM_FRAME
-    const int want = gevrDiag()->refresh_rate > 0 ? gevrDiag()->refresh_rate : VrRefreshRate;
+    const int diagHz = gevrDiag()->refresh_rate;
+    const int setting = gevrRefreshClampSetting(diagHz > 0 ? diagHz : VrRefreshRate);
+    gevrRefreshInit(&g_refresh);
+    PFN_xrEnumerateDisplayRefreshRatesFB enumRates = nullptr;
+    PFN_xrRequestDisplayRefreshRateFB request = nullptr;
+    PFN_xrGetDisplayRefreshRateFB current = nullptr;
+    if (g_refreshRateSupported) {
+        xrGetInstanceProcAddr(g_vrState.instance, "xrEnumerateDisplayRefreshRatesFB", (PFN_xrVoidFunction *)&enumRates);
+        xrGetInstanceProcAddr(g_vrState.instance, "xrRequestDisplayRefreshRateFB", (PFN_xrVoidFunction *)&request);
+        xrGetInstanceProcAddr(g_vrState.instance, "xrGetDisplayRefreshRateFB", (PFN_xrVoidFunction *)&current);
+    }
+    std::vector<float> rates;
+    if (enumRates) {
+        uint32_t n = 0;
+        enumRates(g_vrState.session, 0, &n, nullptr);
+        rates.resize(n);
+        enumRates(g_vrState.session, n, &n, rates.data());
+    }
+    char list[96] = "";
+    for (float r : rates) {
+        const size_t len = strlen(list);
+        snprintf(list + len, sizeof(list) - len, "%s%.0f", len ? " " : "", r);
+    }
+    float now = 0.0f;
+    if (current) current(g_vrState.session, &now);
+    const int want = gevrRefreshRequestFor(setting, rates.data(), (int)rates.size());
+    if (want > 0 && request) {
+        const XrResult res = request(g_vrState.session, (float)want);
+        LOGI("[vr] display: %d Hz (%s) requested once: result %d; offered: %s; current %.0f Hz", want,
+             diagHz > 0 ? "vr-diag.ini refresh_rate" : "DisplayHz", (int)res, list[0] ? list : "none", now);
+    } else {
+        LOGI("[vr] display: %s; offered: %s; current %.0f Hz (the rate is GoldenEyeVR's per-app rate in SteamVR)",
+             setting == GEVR_REFRESH_AUTO ? "DisplayHz Auto, nothing requested"
+                                          : "the DisplayHz rate is not offered, nothing requested",
+             list[0] ? list : "none", now);
+    }
+}
+
+/*
+ * Once per XR frame (vr_begin_frame_and_update_poses): the rate running (logged when it changes) and
+ * the 10 s windows that decide whether to recommend a lower per-app rate. Worn: the session focused and
+ * the runtime asking for frames, never a force_render run.
+ */
+static void vr_refresh_window(double nowMs, XrDuration periodNs, bool worn)
+{
+    static double winStart = -1.0, lastFrame = -1.0, maxGap = 0.0;
+    static unsigned frames = 0, missed = 0, throttled = 0;
+    static bool allWorn = true;
+    // The panel's rate is the shortest period seen: while the app is slow (a load) SteamVR hands it
+    // a multiple of the period (60, 30, 24 Hz at a 120 Hz panel), which is not the display's rate.
+    static XrDuration panelNs = 0;
+    if (periodNs > 0 && (panelNs == 0 || periodNs < panelNs - 200000)) {
+        panelNs = periodNs;
+        LOGI("[vr] display running at %.1f Hz (predictedDisplayPeriod %.3f ms)", 1.0e9 / (double)periodNs,
+             (double)periodNs / 1.0e6);
+    }
+    if (panelNs > 0 && periodNs > panelNs + panelNs / 2) throttled++;
+    periodNs = panelNs;
+    if (winStart < 0.0) {
+        winStart = lastFrame = nowMs;
+        return;
+    }
+    const double gap = nowMs - lastFrame;
+    if (gap > maxGap) maxGap = gap;
+    if (periodNs > 0 && gap > 1.5 * (double)periodNs / 1.0e6) missed++;
+    lastFrame = nowMs;
+    frames++;
+    allWorn = allWorn && worn;
+    const double elapsed = nowMs - winStart;
+    if (elapsed < GEVR_REFRESH_WINDOW_S * 1000.0) return;
+    const double fps = frames * 1000.0 / elapsed;
+    const double displayHz = periodNs > 0 ? 1.0e9 / (double)periodNs : 0.0;
+    const int rec = gevrRefreshWindow(&g_refresh, fps, displayHz, allWorn && !g_forceRender ? 1 : 0, maxGap);
+    if (rec > 0) {
+        LOGI("[vr] refresh: %.0f Hz not held while worn (%.1f and %.1f fps in two 10 s windows, %u frames missed in "
+             "the last); consider setting GoldenEyeVR's per-app refresh rate to %d Hz in SteamVR's settings",
+             displayHz, g_refresh.fps[0], g_refresh.fps[1], missed, rec);
+    } else if (rec < 0) {
+        LOGI("[vr] refresh: %.0f Hz not held while worn (%.1f and %.1f fps in two 10 s windows); there is no lower rate",
+             displayHz, g_refresh.fps[0], g_refresh.fps[1]);
+    }
+    if (throttled > 0 && !g_forceRender) {
+        LOGI("[vr] display: SteamVR ran %u of %u frames below the panel's %.0f Hz in the last 10 s (the app was late)",
+             throttled, frames, displayHz);
+    }
+    winStart = nowMs;
+    frames = 0;
+    missed = 0;
+    throttled = 0;
+    maxGap = 0.0;
+    allWorn = true;
+}
 #else
+static void vr_request_refresh_rate(void)
+{
     const int want = VrRefreshRate;
-#endif
     if (!g_refreshRateSupported || want <= 0) {
         return;
     }
@@ -560,6 +665,7 @@ static void vr_request_refresh_rate(void)
         LOGI("display: %d Hz not offered, keeping the default", want);
     }
 }
+#endif
 
 // XR_SESSION_STATE_FOCUSED: the game has the controllers (not the system menu).
 static bool g_sessionFocused = false;
@@ -858,15 +964,18 @@ extern "C" bool vr_configure_resolution() {
             s_scaleRead = true;
             vrSettingsReadDisplay();
             const float diagScale = gevrDiag()->render_scale;
-            RENDER_SCALE = diagScale > 0.0f ? std::min(2.0f, std::max(0.5f, diagScale)) : VrRenderScale;
-            LOGI("[vr] render scale %.2f (%s), eye MSAA %dx (%s)", RENDER_SCALE,
-                 diagScale > 0.0f ? "vr-diag.ini render_scale" : "goldeneye-vr.ini RenderScale",
+            RENDER_SCALE = diagScale > 0.0f ? std::min(2.0f, std::max(0.5f, diagScale))
+                                            : vrSettingsEyeScale(VrRenderScale, VrRealRecommendedW);
+            LOGI("[vr] render scale %.3f (%s), eye MSAA %dx (%s)", RENDER_SCALE,
+                 diagScale > 0.0f ? "vr-diag.ini render_scale"
+                 : VrRenderScale > 0.0f ? "goldeneye-vr.ini RenderScale"
+                 : "goldeneye-vr.ini RenderScale Auto: the eye about 2160 from the runtime's recommendation",
                  gevrDiag()->msaa > 0 ? vrSettingsClampMsaa(gevrDiag()->msaa) : VrMsaa,
                  gevrDiag()->msaa > 0 ? "vr-diag.ini msaa" : "goldeneye-vr.ini EyeMsaa");
         }
     }
-    LOGI("[vr] eye width: recommended %d x RENDER_SCALE %.2f (the Quest build's fixed width would be 1832)",
-         VrRealRecommendedW, RENDER_SCALE);
+    LOGI("[vr] eye width: recommended %d x %d, x RENDER_SCALE %.3f = %d (the Quest build's fixed width would be 1832)",
+         VrRealRecommendedW, VrRealRecommendedH, RENDER_SCALE, (int)(VrRealRecommendedW * RENDER_SCALE));
 #else
     constexpr uint32_t VR_FIXED_WIDTH = 1832;
 #endif
@@ -1319,6 +1428,306 @@ static bool vr_create_swapchains()
 }
 
 
+#ifdef GEVR_STEAM_FRAME
+/*
+ * The HUD atlas (Frame build; VR_ARCHITECTURE.md section 11, skill lesson 38). The head-locked HUD (H),
+ * the ammo panel (R) and the weapon panel (P) were each an eye-sized quad swapchain (2160 x 2160, three
+ * images), cycled and filled with a full-size copy on every XR frame, and the compositor sampled
+ * three eye-sized textures for quads that cover a fraction of the view. Now they share one swapchain of
+ * W x H/2 (W x H the eye): H downsampled 2:1 into its left half (1080 texels over its 44 degrees is
+ * still more than the panel shows), R's and P's crops at full resolution in the right half's two
+ * quarters (scaled down only if a crop is bigger than its quarter, logged). It is cycled once per game
+ * frame that changed a capture, not once per XR frame: XR frames between game frames resubmit the
+ * image last released. vr-diag.ini perf_legacy bit 1 brings back the four swapchains.
+ */
+static void vr_menu_layer_diag(const char* name, GLuint srcTex);
+enum { HUD_R = 1, HUD_H = 2, HUD_P = 3 };
+struct VrHudRegion {
+    int32_t x, y, w, h;     /* where it was copied in the atlas (GL origin bottom-left) */
+    float box[4];           /* the capture's part copied, 0..1, GL origin: x0 y0 x1 y1 */
+    bool valid;
+};
+static XrSwapchain g_hudAtlas = XR_NULL_HANDLE;
+static std::vector<XrSwapchainImageOpenGLESKHR> g_hudAtlasImages;
+static uint32_t g_hudAtlasW, g_hudAtlasH;
+static VrHudRegion g_hudRegion[4];
+static unsigned g_hudCopiedGen[4];
+static bool g_hudCopiedShown[4];
+static GLuint s_atlasProg, s_atlasVao, s_atlasFbo;
+static GLint s_atlasSrcLoc = -1, s_atlasDstLoc = -1, s_atlasLinLoc = -1;
+static bool s_atlasProgFailed;
+extern "C" unsigned gfx_vr_hud_generation(int k);   // gfx_opengl.cpp: bumped by each capture that drew
+
+static bool vr_hud_atlas_mode(void)
+{
+    return g_hudAtlas != XR_NULL_HANDLE;
+}
+
+static bool vr_hud_atlas_create(XrSwapchainCreateInfo info)
+{
+    if (gevrDiag()->perf_legacy & GEVR_PERF_LEGACY_HUD_LAYERS) {
+        LOGI("[vr] HUD layers: one eye-sized swapchain per capture (vr-diag.ini perf_legacy)");
+        return false;
+    }
+    g_hudAtlasW = (info.width + 1u) & ~1u;
+    g_hudAtlasH = ((info.height / 2u) + 1u) & ~1u;
+    info.width = g_hudAtlasW;
+    info.height = g_hudAtlasH;
+    if (XR_FAILED(xrCreateSwapchain(g_vrState.session, &info, &g_hudAtlas))) {
+        LOGE("[vr] HUD atlas: xrCreateSwapchain %ux%u failed, back to a swapchain per capture", g_hudAtlasW, g_hudAtlasH);
+        g_hudAtlas = XR_NULL_HANDLE;
+        return false;
+    }
+    uint32_t n = 0;
+    xrEnumerateSwapchainImages(g_hudAtlas, 0, &n, nullptr);
+    g_hudAtlasImages.assign(n, {XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR});
+    xrEnumerateSwapchainImages(g_hudAtlas, n, &n, reinterpret_cast<XrSwapchainImageBaseHeader *>(g_hudAtlasImages.data()));
+    // the per-capture handles all name the atlas, so the submit code's checks and quads stay as they were
+    g_menuSwapchain = XR_NULL_HANDLE;   // the left-hand capture: GoldenEye never draws one
+    g_menuSwapchainR = g_menuSwapchainH = g_menuSwapchainP = g_hudAtlas;
+    memset(g_hudRegion, 0, sizeof(g_hudRegion));
+    memset(g_hudCopiedShown, 0, sizeof(g_hudCopiedShown));
+    LOGI("[vr] HUD atlas: one swapchain %ux%u (%u images) for the head-locked HUD (2:1), the ammo and weapon panels "
+         "(crops), cycled once per game frame that changes one; the captures are %ux%u",
+         g_hudAtlasW, g_hudAtlasH, n, g_menuSwapchainWidth, g_menuSwapchainHeight);
+    return true;
+}
+
+static void vr_hud_atlas_destroy(void)
+{
+    if (g_hudAtlas != XR_NULL_HANDLE) {
+        xrDestroySwapchain(g_hudAtlas);
+        g_hudAtlas = XR_NULL_HANDLE;
+        g_menuSwapchainR = g_menuSwapchainH = g_menuSwapchainP = XR_NULL_HANDLE;
+    }
+    g_hudAtlasImages.clear();
+}
+
+static bool vr_hud_atlas_prog(void)
+{
+    if (s_atlasProg) return true;
+    if (s_atlasProgFailed) return false;
+    static const char *vsSrc =
+            "#version 300 es\n"
+            "const vec2 pos[3] = vec2[3](vec2(-1.0,-1.0), vec2(3.0,-1.0), vec2(-1.0,3.0));\n"
+            "void main() { gl_Position = vec4(pos[gl_VertexID], 0.0, 1.0); }\n";
+    // The capture holds premultiplied display-encoded bytes. Filtered as they are (2:1 for the HUD: the
+    // bilinear tap between four texels is their average), then, for an sRGB image, made linear and
+    // premultiplied again, as vr_copy_menu_layer does, so the bytes stored are the game's.
+    static const char *fsSrc =
+            "#version 300 es\n"
+            "precision highp float;\n"
+            "uniform highp sampler2DArray uTex;\n"
+            "uniform vec4 uSrc;\n"   // the capture's part, 0..1: x0 y0 x1 y1
+            "uniform vec4 uDst;\n"   // the atlas rect in pixels: x y w h
+            "uniform int uLinear;\n"
+            "out vec4 o;\n"
+            "vec3 srgb_to_linear(vec3 c) {\n"
+            "    return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));\n"
+            "}\n"
+            "void main() {\n"
+            "    vec2 t = (gl_FragCoord.xy - uDst.xy) / uDst.zw;\n"
+            "    vec4 c = texture(uTex, vec3(mix(uSrc.xy, uSrc.zw, t), 0.0));\n"
+            "    if (uLinear != 0) {\n"
+            "        vec3 straight = (c.a > 0.0) ? clamp(c.rgb / c.a, 0.0, 1.0) : vec3(0.0);\n"
+            "        o = vec4(srgb_to_linear(straight) * c.a, c.a);\n"
+            "    } else {\n"
+            "        o = c;\n"
+            "    }\n"
+            "}\n";
+    auto compile = [](GLenum type, const char *src) -> GLuint {
+        GLuint sh = glCreateShader(type);
+        glShaderSource(sh, 1, &src, nullptr);
+        glCompileShader(sh);
+        GLint ok = 0;
+        glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
+        if (!ok) {
+            char log[512];
+            glGetShaderInfoLog(sh, sizeof(log), nullptr, log);
+            LOGE("[vr] HUD atlas shader: %s", log);
+            glDeleteShader(sh);
+            return 0;
+        }
+        return sh;
+    };
+    GLuint vs = compile(GL_VERTEX_SHADER, vsSrc), fs = compile(GL_FRAGMENT_SHADER, fsSrc);
+    if (!vs || !fs) {
+        s_atlasProgFailed = true;
+        return false;
+    }
+    GLuint p = glCreateProgram();
+    glAttachShader(p, vs);
+    glAttachShader(p, fs);
+    glLinkProgram(p);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    GLint ok = 0;
+    glGetProgramiv(p, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        LOGE("[vr] HUD atlas program link failed");
+        glDeleteProgram(p);
+        s_atlasProgFailed = true;
+        return false;
+    }
+    s_atlasSrcLoc = glGetUniformLocation(p, "uSrc");
+    s_atlasDstLoc = glGetUniformLocation(p, "uDst");
+    s_atlasLinLoc = glGetUniformLocation(p, "uLinear");
+    glUseProgram(p);
+    glUniform1i(glGetUniformLocation(p, "uTex"), 0);
+    glUseProgram(0);
+    glGenVertexArrays(1, &s_atlasVao);
+    glGenFramebuffers(1, &s_atlasFbo);
+    s_atlasProg = p;
+    return true;
+}
+
+/*
+ * A capture's part (`box`, 0..1 GL origin, snapped out to whole texels) into the atlas cell at (cx, cy)
+ * of cw x ch: at full size when it fits, else scaled down to fit (`half` forces 2:1, the HUD).
+ */
+static void vr_hud_atlas_place(int k, const float boxIn[4], int32_t cx, int32_t cy, int32_t cw, int32_t ch, bool half)
+{
+    const float W = (float)g_menuSwapchainWidth, H = (float)g_menuSwapchainHeight;
+    float b[4] = { boxIn[0], boxIn[1], boxIn[2], boxIn[3] };
+    for (int i = 0; i < 4; i++) b[i] = b[i] < 0.0f ? 0.0f : b[i] > 1.0f ? 1.0f : b[i];
+    const int32_t sx0 = (int32_t)floorf(b[0] * W), sy0 = (int32_t)floorf(b[1] * H);
+    const int32_t sx1 = (int32_t)ceilf(b[2] * W), sy1 = (int32_t)ceilf(b[3] * H);
+    const int32_t sw = sx1 - sx0 > 1 ? sx1 - sx0 : 1, sh = sy1 - sy0 > 1 ? sy1 - sy0 : 1;
+    float k2 = half ? 0.5f : 1.0f;
+    if (sw * k2 > cw) k2 = (float)cw / (float)sw;
+    if (sh * k2 > ch) k2 = (float)ch / (float)sh;
+    VrHudRegion &r = g_hudRegion[k];
+    r.x = cx;
+    r.y = cy;
+    r.w = (int32_t)(sw * k2) > 1 ? (int32_t)(sw * k2) : 1;
+    r.h = (int32_t)(sh * k2) > 1 ? (int32_t)(sh * k2) : 1;
+    r.box[0] = sx0 / W;
+    r.box[1] = sy0 / H;
+    r.box[2] = (sx0 + sw) / W;
+    r.box[3] = (sy0 + sh) / H;
+    r.valid = true;
+    if (!half && k2 < 0.999f) {
+        static unsigned logged[4];
+        if ((logged[k]++ % 600) == 0) {
+            LOGI("[vr] HUD atlas: capture %d's crop %dx%d scaled %.2f to fit its %dx%d cell", k, sw, sh, k2, cw, ch);
+        }
+    }
+}
+
+static void vr_hud_atlas_draw(int k, GLuint srcTex)
+{
+    const VrHudRegion &r = g_hudRegion[k];
+    glViewport(r.x, r.y, r.w, r.h);
+    glUniform4f(s_atlasSrcLoc, r.box[0], r.box[1], r.box[2], r.box[3]);
+    glUniform4f(s_atlasDstLoc, (float)r.x, (float)r.y, (float)r.w, (float)r.h);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, srcTex);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+}
+
+/*
+ * This XR frame's HUD: which captures are shown (`show`, indexed L R H P), R's and P's crops. Fills the
+ * atlas when a shown capture changed since the last fill (or one is newly shown), else leaves the image
+ * last released in place.
+ */
+static void vr_hud_atlas_update(const bool show[4], const float boxR[4], const float boxP[4])
+{
+    bool need = false;
+    for (int k = HUD_R; k <= HUD_P; k++) {
+        if (!show[k]) continue;
+        if (!g_hudCopiedShown[k] || gfx_vr_hud_generation(k) != g_hudCopiedGen[k]) need = true;
+    }
+    if (!need) {
+        for (int k = HUD_R; k <= HUD_P; k++) {
+            if (show[k]) vrProfCount(VRPROF_HUD_SKIPPED);
+        }
+        return;
+    }
+    if (!vr_hud_atlas_prog()) return;
+
+    const int32_t W = (int32_t)g_hudAtlasW, H = (int32_t)g_hudAtlasH, halfW = W / 2, quarterH = H / 2;
+    // cells: H the left half (W/2 x H/2 of the eye), R the right half's top, P its bottom
+    if (show[HUD_H]) {
+        const float all[4] = { 0.0f, 0.0f, 1.0f, 1.0f };
+        vr_hud_atlas_place(HUD_H, all, 0, 0, halfW, H, true);
+    }
+    if (show[HUD_R]) vr_hud_atlas_place(HUD_R, boxR, halfW, quarterH, W - halfW, H - quarterH, false);
+    if (show[HUD_P]) vr_hud_atlas_place(HUD_P, boxP, halfW, 0, W - halfW, quarterH, false);
+
+    uint32_t idx = 0;
+    XrSwapchainImageAcquireInfo acquireInfo{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+    if (XR_FAILED(xrAcquireSwapchainImage(g_hudAtlas, &acquireInfo, &idx))) return;
+    XrSwapchainImageWaitInfo waitInfo{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+    waitInfo.timeout = XR_INFINITE_DURATION;
+    xrWaitSwapchainImage(g_hudAtlas, &waitInfo);
+    const GLuint image = g_hudAtlasImages[idx].image;
+    VR_NOTE_IMAGE(g_hudAtlas, image);
+    vrProfGpuAuxBegin();
+
+    GLint prevProg = 0, prevVao = 0, prevTex = 0, prevActive = 0, prevFbo = 0, vp[4];
+    GLfloat prevClear[4];
+    const GLboolean prevBlend = glIsEnabled(GL_BLEND), prevScissor = glIsEnabled(GL_SCISSOR_TEST);
+    glGetIntegerv(GL_CURRENT_PROGRAM, &prevProg);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVao);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &prevActive);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
+    glGetIntegerv(GL_VIEWPORT, vp);
+    glGetFloatv(GL_COLOR_CLEAR_VALUE, prevClear);
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &prevTex);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, s_atlasFbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, image, 0);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_BLEND);
+    glViewport(0, 0, W, H);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);   // nothing stale beside a crop for the compositor's filter to catch
+    glUseProgram(s_atlasProg);
+    glBindVertexArray(s_atlasVao);
+    glUniform1i(s_atlasLinLoc, g_menuSwapchainIsSrgb ? 1 : 0);
+    static const char *const names[4] = { "vr-hud-L.bmp", "vr-hud-R.bmp", "vr-hud-H.bmp", "vr-hud-P.bmp" };
+    for (int k = HUD_R; k <= HUD_P; k++) {
+        g_hudCopiedShown[k] = show[k];
+        if (!show[k]) continue;
+        const GLuint src = k == HUD_R ? gfx_opengl_get_vr_menu_texture_R()
+                         : k == HUD_H ? gfx_opengl_get_vr_menu_texture_H() : gfx_opengl_get_vr_menu_texture_P();
+        vr_hud_atlas_draw(k, src);
+        g_hudCopiedGen[k] = gfx_vr_hud_generation(k);
+        vrProfCount(VRPROF_HUD_COPY);
+    }
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+
+    glBindTexture(GL_TEXTURE_2D_ARRAY, (GLuint)prevTex);
+    glActiveTexture((GLenum)prevActive);
+    glBindVertexArray((GLuint)prevVao);
+    glUseProgram((GLuint)prevProg);
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prevFbo);
+    glViewport(vp[0], vp[1], vp[2], vp[3]);
+    glClearColor(prevClear[0], prevClear[1], prevClear[2], prevClear[3]);
+    if (prevBlend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+    if (prevScissor) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
+    vrProfGpuAuxEnd();
+    for (int k = HUD_R; k <= HUD_P; k++) {
+        if (!show[k]) continue;
+        const GLuint src = k == HUD_R ? gfx_opengl_get_vr_menu_texture_R()
+                         : k == HUD_H ? gfx_opengl_get_vr_menu_texture_H() : gfx_opengl_get_vr_menu_texture_P();
+        vr_menu_layer_diag(names[k], src);   // diag_gl, dump_hud: the captures themselves, as before
+    }
+
+    XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+    xrReleaseSwapchainImage(g_hudAtlas, &releaseInfo);
+}
+
+/* a quad's sub-image: its cell of the atlas */
+static void vr_hud_atlas_subimage(XrCompositionLayerQuad &q, int k)
+{
+    const VrHudRegion &r = g_hudRegion[k];
+    q.subImage.swapchain = g_hudAtlas;
+    q.subImage.imageRect.offset = {r.x, r.y};
+    q.subImage.imageRect.extent = {r.w, r.h};
+}
+#endif
+
 // ============================================================================
 // SWAPCHAINS - MENU Texture Creation
 // ============================================================================
@@ -1343,12 +1752,20 @@ static bool vr_create_menu_swapchain()
     swapchainInfo.arraySize  = 1;
     swapchainInfo.mipCount   = 1;
 
+    uint32_t imageCount = 0;
+#ifdef GEVR_STEAM_FRAME
+    // the HUD quads share one atlas swapchain (vr_hud_atlas_update) unless perf_legacy asks otherwise
+    const bool perCapture = !vr_hud_atlas_create(swapchainInfo);
+#else
+    const bool perCapture = true;
+#endif
+    if (perCapture) {
     // Swapchain Left
     if (XR_FAILED(xrCreateSwapchain(g_vrState.session, &swapchainInfo, &g_menuSwapchain))) {
         LOGE("xrCreateSwapchain (menu L) failed (format=0x%llx)", (unsigned long long)chosenFormat);
         return false;
     }
-    uint32_t imageCount = 0;
+    imageCount = 0;
     xrEnumerateSwapchainImages(g_menuSwapchain, 0, &imageCount, nullptr);
 #ifdef ANDROID
     g_menuSwapchainImages.resize(imageCount, {XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR});
@@ -1405,6 +1822,7 @@ static bool vr_create_menu_swapchain()
 
     LOGI("Menu swapchains created L/R/H/P: %u x %u (format=0x%llx)",
          g_menuSwapchainWidth, g_menuSwapchainHeight, (unsigned long long)chosenFormat);
+    }   // perCapture
 
     // The scope lenses (issue #40), one per hand: the scope target's size.
     // Without one that scope just doesn't show; the menus above still work.
@@ -4003,6 +4421,9 @@ static void vr_compose_dump(const XrCompositionLayerBaseHeader *const *layers, i
         if (sc == g_ptrSc) return "pointer";
         if (sc == g_scopeSwapchain[0] || sc == g_scopeSwapchain[1]) return "scope";
         if (sc == g_screenSwapchain) return "screen";
+#ifdef GEVR_STEAM_FRAME
+        if (sc == g_hudAtlas && sc != XR_NULL_HANDLE) return "hud-atlas";
+#endif
         if (sc == g_menuSwapchain) return "hud-L";
         if (sc == g_menuSwapchainR) return "hud-R";
         if (sc == g_menuSwapchainH) return "hud-H";
@@ -4068,6 +4489,11 @@ static void vr_compose_dump(const XrCompositionLayerBaseHeader *const *layers, i
 }
 #endif
 
+#ifdef GEVR_STEAM_FRAME
+#define VR_HUD_PER_CAPTURE (!vr_hud_atlas_mode())
+#else
+#define VR_HUD_PER_CAPTURE true
+#endif
 static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2>& views) {
     vr_stats_xr_frame();
 #ifdef ANDROID
@@ -4169,7 +4595,7 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
     // --- HUD Right hand ---
     bool submitMenuR = (g_menuSwapchainR != XR_NULL_HANDLE) && gfx_vr_menu_R_dirty_and_clear();
 
-    if (submitMenuR) vr_update_menu_swapchain_R();
+    if (submitMenuR && VR_HUD_PER_CAPTURE) vr_update_menu_swapchain_R();
 
     XrCompositionLayerQuad menuLayerR = vr_init_menu_quad(g_menuSwapchainR);
 
@@ -4233,7 +4659,7 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
 
     // --- HUD head-locked ---
     bool submitMenuH = (g_menuSwapchainH != XR_NULL_HANDLE) && gfx_vr_menu_H_dirty_and_clear();
-    if (submitMenuH) vr_update_menu_swapchain_H();
+    if (submitMenuH && VR_HUD_PER_CAPTURE) vr_update_menu_swapchain_H();
 
     XrCompositionLayerQuad menuLayerH = vr_init_menu_quad(g_menuSwapchainH);
 
@@ -4258,7 +4684,7 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
     // --- The weapon panel (issue #10): above the weapon hand, facing the eyes ---
     // (the left hand's panel, issue #56: above the off hand)
     bool submitMenuP = (g_menuSwapchainP != XR_NULL_HANDLE) && gfx_vr_menu_P_dirty_and_clear();
-    if (submitMenuP) vr_update_menu_swapchain_P();
+    if (submitMenuP && VR_HUD_PER_CAPTURE) vr_update_menu_swapchain_P();
 
     XrCompositionLayerQuad menuLayerP = vr_init_menu_quad(g_menuSwapchainP);
     if (submitMenuP) {
@@ -4315,6 +4741,43 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
     }
 
 #ifdef GEVR_STEAM_FRAME
+    // --- The HUD atlas (vr_hud_atlas_update): the shown captures' cells, filled when they changed ---
+    if (vr_hud_atlas_mode()) {
+        float boxR[4] = {0.60f, 0.02f, 1.0f, 0.22f};
+        gfx_vr_menu_R_bbox(boxR);
+        const float m = 0.02f;
+        boxR[0] -= m; boxR[1] -= m; boxR[2] += m; boxR[3] += m;   // as the per-capture crop above
+        float boxP[4] = {0.0f, 0.0f, 1.0f, 1.0f};
+        {
+            const float x0 = gevrWeaponPanelRect[0], y0 = gevrWeaponPanelRect[1];
+            const float x1 = gevrWeaponPanelRect[2], y1 = gevrWeaponPanelRect[3];
+            if (x1 > x0 && y1 > y0) {   // top-left origin in the game's rect, GL's bottom-left here
+                boxP[0] = x0; boxP[1] = 1.0f - y1; boxP[2] = x1; boxP[3] = 1.0f - y0;
+            }
+        }
+        const bool show[4] = { false, submitMenuR, submitMenuH, submitMenuP };
+        vr_hud_atlas_update(show, boxR, boxP);
+        const float W = (float)g_menuSwapchainWidth, H = (float)g_menuSwapchainHeight;
+        if (submitMenuR && g_hudRegion[HUD_R].valid) {
+            vr_hud_atlas_subimage(menuLayerR, HUD_R);
+            const float *b = g_hudRegion[HUD_R].box;
+            const float width = (b[2] - b[0]) * 0.6f;   // the whole capture would be 0.6 m wide, as before
+            menuLayerR.size = {width, width * ((b[3] - b[1]) * H) / ((b[2] - b[0]) * W)};
+        }
+        if (submitMenuH && g_hudRegion[HUD_H].valid) {
+            vr_hud_atlas_subimage(menuLayerH, HUD_H);   // the size stays the capture's aspect
+        }
+        if (submitMenuP && g_hudRegion[HUD_P].valid) {
+            vr_hud_atlas_subimage(menuLayerP, HUD_P);
+            const float *b = g_hudRegion[HUD_P].box;
+            const float boxW = (b[2] - b[0]) * W, boxH = (b[3] - b[1]) * H;
+            menuLayerP.size = {0.14f * boxW / (boxH > 1.f ? boxH : 1.f), 0.14f};
+        }
+        submitMenuR = submitMenuR && g_hudRegion[HUD_R].valid;
+        submitMenuH = submitMenuH && g_hudRegion[HUD_H].valid;
+        submitMenuP = submitMenuP && g_hudRegion[HUD_P].valid;
+    }
+
     // --- The scope (issue #40): the zoomed picture on the eyepiece's face (vr_scope_math.h) ---
     // A projection layer in the eye layer's own space and poses (the views the eye image was drawn
     // with), so the compositor moves it exactly as it moves the rifle model drawn in that image:
@@ -5218,6 +5681,8 @@ extern "C" bool vr_begin_frame_and_update_poses()
     }
     vrFramePerfFrame(vrFrameNowMs() - waitT0, (float)(g_frameState.predictedDisplayPeriod / 1.0e6),
                      (int)g_frameState.shouldRender);
+    vr_refresh_window(vrFrameNowMs(), g_frameState.predictedDisplayPeriod,
+                      g_sessionFocused && runtimeShouldRender && !g_synthHead);
     vrFrameDumpFrameBegin(g_xrFrameCount);
     gevrDiagFrameTick(vrFrameNowMs());
     if (g_xrFrameCount <= 3 || g_xrFrameCount % 720 == 0) {
@@ -5683,6 +6148,9 @@ extern "C" void vr_shutdown()
     g_swapchainImagesInit[0] = false;
     g_swapchainImages[0].clear();
 
+#ifdef GEVR_STEAM_FRAME
+    vr_hud_atlas_destroy();   // R, H and P named the atlas: destroyed once, here
+#endif
     if (g_menuSwapchain != XR_NULL_HANDLE) {
         xrDestroySwapchain(g_menuSwapchain);
         g_menuSwapchain = XR_NULL_HANDLE;

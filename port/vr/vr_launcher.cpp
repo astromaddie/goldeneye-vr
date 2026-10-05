@@ -2170,23 +2170,26 @@ static void gevrGraphicsPage(bool &open, const ImVec4 &gold)
 
     ImGui::TextColored(gold, "RESOLUTION");
     {
-        static const float kScales[] = { 0.75f, 1.0f, 1.25f, 1.5f };
-        static const char *kLabels[] = { "75%", "100%", "125%", "150%" };
-        int pick = 1;
-        for (int i = 0; i < 4; i++) {
+        // Auto (0, the default): the eye about the panel's 2160 whatever the runtime recommends
+        static const float kScales[] = { 0.0f, 0.75f, 1.0f, 1.25f, 1.5f };
+        static const char *kLabels[] = { "Auto", "75%", "100%", "125%", "150%" };
+        int pick = 0;
+        for (int i = 1; i < 5; i++) {
             if (std::fabs(VrRenderScale - kScales[i]) < 0.01f) pick = i;
         }
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < 5; i++) {
             if (i) ImGui::SameLine();
             char id[24];
             snprintf(id, sizeof(id), "%s##scale", kLabels[i]);
             if (ImGui::RadioButton(id, &pick, i)) {
                 VrRenderScale = kScales[pick];
-                vr_log("VR settings: RenderScale %.2f (from the next start)", VrRenderScale);
+                vr_log("VR settings: RenderScale %.2f (0 = Auto; from the next start)", VrRenderScale);
             }
         }
         const int w = vr_get_internal_render_width(), h = vr_get_internal_render_height();
-        if (std::fabs(VrRenderScale - RENDER_SCALE) < 0.01f) {
+        if (VrRenderScale <= 0.0f) {
+            ImGui::TextDisabled("Now %d x %d an eye (%.0f%%); Auto aims at about 2160.", w, h, RENDER_SCALE * 100.0f);
+        } else if (std::fabs(VrRenderScale - RENDER_SCALE) < 0.01f) {
             ImGui::TextDisabled("Now %d x %d an eye.", w, h);
         } else {
             ImGui::TextDisabled("Now %d x %d an eye (%.0f%%); %.0f%% from the next start.", w, h,
@@ -2532,10 +2535,22 @@ static void gevrSettingsColumns(bool inGame, int *mode, GevrComfortChoice &comfo
         }
 #endif
         {
+#ifdef GEVR_STEAM_FRAME
+            // Auto by default (standard.md section 9): the rate set for GoldenEyeVR in SteamVR's
+            // per-app settings (the app can't change it); a fixed rate is asked for only if offered.
+            int hz = VrRefreshRate <= 0 ? 0 : VrRefreshRate >= 105 ? 120 : VrRefreshRate < 81 ? 72 : 90;
+            bool picked = ImGui::RadioButton("Auto", &hz, 0);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("SteamVR's per-app rate for GoldenEyeVR (set it to 120 Hz there)");
+            }
+            ImGui::SameLine();
+            picked |= ImGui::RadioButton("72 Hz", &hz, 72);
+#else
             // 90 Hz by default; 120 shows each 60 Hz game frame exactly
             // twice (smoothest hands) but works the headset hardest.
             int hz = VrRefreshRate >= 110 ? 120 : VrRefreshRate > 0 && VrRefreshRate < 81 ? 72 : 90;
             bool picked = ImGui::RadioButton("72 Hz", &hz, 72);
+#endif
             ImGui::SameLine();
             picked |= ImGui::RadioButton("90 Hz", &hz, 90);
             ImGui::SameLine();
