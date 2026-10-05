@@ -45,7 +45,7 @@ static s32 gevrCrouchToggle = 0;
  * stick clicks recentre (GEVR PC's GETV_XR_RECENTER_CHORD).
  */
 extern s32 g_gevrStereo;          /* bondview2.c: this frame is stereo */
-extern s32 gevrScopeZoomStick(void);  /* bondview2.c: aiming the sniper, this stick zooms */
+extern s32 gevrScopeZoomStick(void);  /* bondview2.c: aiming the sniper, the turn stick zooms */
 extern s32 gevrStereoWatchItem(s32 item);  /* bondview2.c: the watch laser, the detonator (#31) */
 extern int gevrVrScreenMode;      /* gfx_pc.cpp: this frame is on the virtual screen */
 extern int gevrVrWatchScreenUp(void);   /* vr_openxr.cpp: the paused watch's own screen is up (Frame build) */
@@ -62,9 +62,16 @@ int gevrGunFitActive;                     /* bondview2.c draws the readout while
 extern float VrGripTrim[2][6];            /* vr_settings_defaults.c: the two-handed hold's hand (#35) */
 extern s32 gevrStereoTwoHandClass(void);  /* bondview2.c: 0 handgun, 1 long gun */
 static float gevrTurnAxis = 0.0f;
+/*
+ * Aiming the sniper in stereo, the turn stick's up/down zooms the scope (round-3 wear 2026-10-05:
+ * the standard's right stick, not the move stick, which now keeps moving): -1..1 past its dead
+ * zone, + zooms in. bondview2.c reads it in place of the N64's C-up/down zoom.
+ */
+float gevrScopeZoomAxis = 0.0f;
 static s32 gevrRecenterPending = 0;   /* 1 recentre, 2 recentre and re-take the standing height */
 extern float gevrInjectTurn;   /* libultra.c: the PC input hook's turn */
 extern float gevrDiagTurn(void);   /* vr_diag.c: vr-diag.ini diag_turn (Frame build), 0 = none */
+extern float gevrDiagZoom(void);   /* vr_diag.c: vr-diag.ini diag_zoom (Frame build), 0 = none */
 float gevrVrTurnAxis(void)
 {
     if (gevrInjectTurn != 0.0f) return gevrInjectTurn;
@@ -1085,6 +1092,7 @@ s32 inputReadController(s32 idx, OSContPad *npad)
          * clock (no idle kick while someone is using them). */
         if (gevrVrSettingsBlocksPad()) {
             gevrTurnAxis = 0.0f;
+            gevrScopeZoomAxis = 0.0f;
             gevrVrTriggerDown[0] = gevrVrTriggerDown[1] = 0;
             gevrWeaponPanelStickY = 0.0f;
             vr_button_L_grip = 0;
@@ -1095,6 +1103,9 @@ s32 inputReadController(s32 idx, OSContPad *npad)
         XrVector2f left = {0}, right = {0};
         get_2d_input(0, "thumbstick", &left);
         get_2d_input(1, "thumbstick", &right);
+        if (gevrDiagZoom() != 0.0f && right.x == 0.0f && right.y == 0.0f) {
+            right.y = gevrDiagZoom();   /* vr-diag.ini diag_zoom: the turn stick held up or down */
+        }
         // Gun fit (launcher "Gun fit...", user): in a level with a gun in hand,
         // the sticks move the gun on the hand - VrGunOffX/Y/Z, which
         // bondview2.c gevrStereoGunMatrix reads every frame - instead of the
@@ -1542,7 +1553,18 @@ s32 inputReadController(s32 idx, OSContPad *npad)
         const bool panelOnMoveStick = gevrWeaponPanelOpen && ((gevrWeaponPanelLeft != 0) == (VrSwapJoysticks != 0));
         const bool panelOnTurnStick = gevrWeaponPanelOpen && !panelOnMoveStick;
         gevrWeaponPanelStickY = panelOnMoveStick ? left.y : panelOnTurnStick ? right.y : 0.0f;
-        if (g_gevrStereo && !menu && !adjusting && !panelOnTurnStick) {
+        // Aiming the sniper (stereo): the turn stick's up/down zooms the scope, and while it is
+        // pushed more up/down than sideways it does not turn (a zoom must not snap the view).
+        const bool zoomStick = g_gevrStereo && !menu && !adjusting && !panelOnTurnStick && gevrScopeZoomStick() != 0;
+        gevrScopeZoomAxis = 0.0f;
+        if (zoomStick) {
+            const float dz = 0.25f;
+            const float y = right.y;
+            if (fabsf(y) >= dz && fabsf(y) > fabsf(right.x)) {
+                gevrScopeZoomAxis = (y - (y > 0.0f ? dz : -dz)) / (1.0f - dz);
+            }
+        }
+        if (g_gevrStereo && !menu && !adjusting && !panelOnTurnStick && gevrScopeZoomAxis == 0.0f) {
             const float dz = 0.15f;
             float x = right.x;
             if (fabsf(x) < dz) x = 0.0f;
@@ -1550,12 +1572,12 @@ s32 inputReadController(s32 idx, OSContPad *npad)
             gevrTurnAxis = x;
         }
         if (!menu && !panelOnMoveStick) {
-            // Solitaire: C directions move; while aiming down/up crouches/stands,
-            // or with the sniper zooms - and then side to side does not strafe
-            // the scope off its target (issue #58, user).
-            const bool zoomStick = gevrScopeZoomStick() != 0;
-            if (!zoomStick && left.x < -0.25f) npad->button |= L_CBUTTONS;
-            if (!zoomStick && left.x >  0.25f) npad->button |= R_CBUTTONS;
+            // Solitaire: C directions move; while aiming down/up crouches/stands and side
+            // to side leans (unless AimNoLean). Aiming the sniper the stick moves as usual:
+            // the scope zooms on the turn stick (above) and its aim does not lock the move
+            // (bondview2.c gevrAimLocksMove).
+            if (left.x < -0.25f) npad->button |= L_CBUTTONS;
+            if (left.x >  0.25f) npad->button |= R_CBUTTONS;
             if (left.y < -0.25f) npad->button |= D_CBUTTONS;
             if (left.y >  0.25f) npad->button |= U_CBUTTONS;
         }

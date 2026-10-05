@@ -57,6 +57,8 @@ typedef struct GevrDiag {
     int   dump_cinema_frame;   /* the dump_frame files this many XR frames after the 3D cinema is placed (a cutscene
                                   starts), with vr-dumps/vr-cinema0.bmp and vr-cinema1.bmp (its two eye images), 0 = off */
     float cinema_sep_mm;       /* the 3D cinema's camera separation in mm, 0 = the default (64) */
+    float diag_zoom;           /* the turn stick held up (+) or down (-) at this % when no controller moves it (the
+                                  sniper's zoom while aiming: port/src/input.c), 0 = off */
 } GevrDiag;
 
 /* The settings; the file is read on the first call. Never NULL. */
@@ -68,6 +70,9 @@ int gevrDiagDifficulty(void);
 
 /* diag_turn as the turn stick's -1..1, 0 when unset (always 0 outside the Frame build). */
 float gevrDiagTurn(void);
+
+/* diag_zoom as the turn stick's up/down, -1..1, 0 when unset (always 0 outside the Frame build). */
+float gevrDiagZoom(void);
 
 /* Once per XR frame: the exit_after_s timer. */
 void gevrDiagFrameTick(double nowMs);

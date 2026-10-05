@@ -169,7 +169,7 @@ the same way as the first time. Your ROM and settings stay where they are.
 | **Left stick** | Walk and strafe |
 | **Right stick** | Turn: smooth or snap, set in the launcher |
 | **Left stick click** | Crouch (toggle) |
-| **Left stick up/down** (aiming the sniper rifle) | Zoom the scope (the stick doesn't strafe then) |
+| **Right stick up/down** (aiming the sniper rifle) | Zoom the scope (pushed up or down it doesn't turn; the left stick keeps walking) |
 | **Swing either hand** at a guard | Melee: chop, punch, pistol-whip, stab or club |
 | **Gun hand at the watch** + **right trigger** | Fire the watch laser |
 | **A** / **X** | Next weapon |

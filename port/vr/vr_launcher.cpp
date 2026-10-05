@@ -2613,7 +2613,9 @@ static void gevrSettingsColumns(bool inGame, int *mode, GevrComfortChoice &comfo
             }
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("Stereo: holding the aim trigger no longer leans or ducks with the move stick,\n"
-                                  "which keeps moving you. Click the left stick to crouch.");
+                                  "which keeps moving you. Click the left stick to crouch.\n"
+                                  "Aiming the sniper rifle, the right stick's up/down zooms the scope and\n"
+                                  "the move stick always keeps moving you.");
             }
             // GitHub pre-releases too (UpdateChecker.java): for trying a
             // fix before it ships. Saved by the updater, not the ini.

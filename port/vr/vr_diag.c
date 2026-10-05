@@ -60,6 +60,10 @@ static void apply(const char *key, const char *val)
     else if (!strcmp(key, "msaa")) s_diag.msaa = atoi(val);
     else if (!strcmp(key, "dump_cinema_frame")) s_diag.dump_cinema_frame = atoi(val);
     else if (!strcmp(key, "cinema_sep_mm")) s_diag.cinema_sep_mm = (float)atof(val);
+    else if (!strcmp(key, "diag_zoom")) {
+        float z = (float)atof(val);
+        s_diag.diag_zoom = z < -100.0f ? -100.0f : z > 100.0f ? 100.0f : z;
+    }
     else DIAG_LOG("[vr-diag] unknown key '%s'", key);
 }
 
@@ -101,15 +105,16 @@ static void load(void)
     DIAG_LOG("[vr-diag] vr-diag.ini %s: force_render=%d diag_yaw=%.1f dump_frame=%d dump_stereo_frame=%d "
              "boot_stage=%d difficulty=%d timing=%d autostart=%d exit_after_s=%.0f one_shot=%d refresh_rate=%d "
              "diag_walk=%d diag_turn=%.0f dump_watch_frame=%d watch_backdrop=%d dump_scope=%d diag_gl=%d dump_hud=%d "
-             "diag_aim=%.0f diag_aim_eye=%d diag_roll=%.0f diag_point=%d dump_cheat_frame=%d render_scale=%.2f msaa=%d "
-             "dump_cinema_frame=%d cinema_sep_mm=%.0f",
+             "diag_aim=%.0f diag_aim_eye=%d diag_aim_turn=%.0f/%.0f/%.0f diag_aim_dx=%.1f diag_aim_swing=%.0f diag_roll=%.0f diag_point=%d dump_cheat_frame=%d render_scale=%.2f msaa=%d "
+             "dump_cinema_frame=%d cinema_sep_mm=%.0f diag_zoom=%.0f",
              s_diag.present ? "read" : "absent", s_diag.force_render, s_diag.diag_yaw, s_diag.dump_frame,
              s_diag.dump_stereo_frame, s_diag.boot_stage, s_diag.difficulty, s_diag.timing, s_diag.autostart,
              s_diag.exit_after_s, s_diag.one_shot, s_diag.refresh_rate, s_diag.diag_walk, s_diag.diag_turn,
              s_diag.dump_watch_frame, s_diag.watch_backdrop, s_diag.dump_scope, s_diag.diag_gl, s_diag.dump_hud,
-             s_diag.diag_aim, s_diag.diag_aim_eye, s_diag.diag_roll, s_diag.diag_point, s_diag.dump_cheat_frame,
+             s_diag.diag_aim, s_diag.diag_aim_eye, s_diag.diag_aim_yaw, s_diag.diag_aim_pitch, s_diag.diag_aim_roll,
+             s_diag.diag_aim_dx, s_diag.diag_aim_swing, s_diag.diag_roll, s_diag.diag_point, s_diag.dump_cheat_frame,
              s_diag.render_scale, s_diag.msaa,
-             s_diag.dump_cinema_frame, s_diag.cinema_sep_mm);
+             s_diag.dump_cinema_frame, s_diag.cinema_sep_mm, s_diag.diag_zoom);
 }
 
 const GevrDiag *gevrDiag(void)
@@ -145,4 +150,5 @@ void gevrDiagFrameTick(double nowMs) { (void)nowMs; }
 
 int gevrDiagBootStage(void) { return gevrDiag()->boot_stage; }
 float gevrDiagTurn(void) { return gevrDiag()->diag_turn / 100.0f; }
+float gevrDiagZoom(void) { return gevrDiag()->diag_zoom / 100.0f; }
 int gevrDiagDifficulty(void) { return gevrDiag()->difficulty; }

@@ -1903,9 +1903,11 @@ s32 gevrAimModeOn(void)
  * headset aims, and the stick click crouches.
  */
 extern int VrAimNoLean;
+s32 gevrScopeZoomStick(void);
 static s32 gevrAimLocksMove(void)
 {
-    return g_CurrentPlayer->insightaimmode && !(g_gevrStereo && VrAimNoLean);
+    /* aiming the sniper in stereo the move stick moves: its zoom is on the turn stick (round-3 wear) */
+    return g_CurrentPlayer->insightaimmode && !(g_gevrStereo && (VrAimNoLean || gevrScopeZoomStick()));
 }
 
 /* gunfire.c: where this frame's muzzle flash node landed, camera space. */
@@ -3782,7 +3784,7 @@ s32 gevrStereoAimTarget(struct coord3d *target)
  *
  * The lens shows the scope's view all the time the sniper is in hand, always
  * zoomed, as a real scope is (user): the game's own sniper zoom -
- * sniper_zoom, 15 degrees by default, changed with up/down on the left stick
+ * sniper_zoom, 15 degrees by default, changed with up/down on the turn stick
  * while aiming as C-up/down on the N64; in stereo no wider than it starts
  * (the N64's 60 showed the world at its own size, user) and on to 2.65
  * degrees, 25x, past the N64's 7 (user: more at max; gun.c) - at the
@@ -3985,9 +3987,10 @@ s32 gevrGripSteadyOn(void)
 }
 
 /*
- * port/src/input.c: aiming the sniper, the moving stick's up/down zooms (the
- * N64's C-up/down); its side to side then strafes the scope off its target,
- * so it does not (issue #58, user).
+ * port/src/input.c: aiming the sniper, the turn stick's up/down zooms (the
+ * N64's C-up/down; the standard's right stick, round-3 wear 2026-10-05: it was
+ * the move stick's, which then neither strafed nor walked). The move stick
+ * keeps moving (gevrAimLocksMove).
  */
 s32 gevrScopeZoomStick(void)
 {
@@ -9383,7 +9386,7 @@ void bondviewProcessInput(s8 stick_x, s8 stick_y, u16 buttons, u16 oldbuttons)
                 moveData.zooming = g_CurrentPlayer->insightaimmode;
 
                 if ((bondwalkItemCheckBitflags(getCurrentPlayerWeaponId(GUNRIGHT), WEAPONSTATBITFLAG_DISABLE_CROUCH))
-                    && g_CurrentPlayer->insightaimmode)
+                    && g_CurrentPlayer->insightaimmode && !g_gevrStereo)
                 {
                     if (tmpc2sticky < 0)
                     {
@@ -9655,6 +9658,7 @@ void bondviewProcessInput(s8 stick_x, s8 stick_y, u16 buttons, u16 oldbuttons)
 
                     if ((bondwalkItemCheckBitflags(getCurrentPlayerWeaponId(GUNRIGHT), WEAPONSTATBITFLAG_DISABLE_CROUCH))
                         && g_CurrentPlayer->insightaimmode
+                        && !g_gevrStereo   /* stereo: the turn stick's up/down zooms (gevrScopeZoomAxis, below) */
                         )
                     {
                         /* down = 0x404 */
@@ -9845,6 +9849,20 @@ void bondviewProcessInput(s8 stick_x, s8 stick_y, u16 buttons, u16 oldbuttons)
 
     gunSetSightVisible(GUNSIGHTREASON_NOTAIMING, moveData.aiming);
 
+    /* stereo, aiming the sniper: the turn stick's up/down zooms (port/src/input.c; round-3 wear) */
+    if (g_gevrStereo && gevrScopeZoomStick())
+    {
+        extern float gevrScopeZoomAxis;
+
+        if (gevrScopeZoomAxis > 0.0f)
+        {
+            moveData.zoomInFovPersec = gevrScopeZoomAxis;
+        }
+        else if (gevrScopeZoomAxis < 0.0f)
+        {
+            moveData.zoomOutFovPersec = -gevrScopeZoomAxis;
+        }
+    }
     if (moveData.zoomOutFovPersec > 0)
     {
         camera_sniper_zoom_out(moveData.zoomOutFovPersec);
