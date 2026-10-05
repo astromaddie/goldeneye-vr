@@ -16,6 +16,7 @@
 #include <android/log.h>
 
 #include "sfvr/sfvr_perf.h"
+#include "vr_xr_prof.h"
 
 #define FLOG(...) __android_log_print(ANDROID_LOG_INFO, "GoldenEye-VR", __VA_ARGS__)
 
@@ -735,6 +736,7 @@ extern "C" void vrFramePerfFrame(double waitMs, float periodMs, int shouldRender
     }
     const double period = now - s_prevFrameStartMs;
     s_prevFrameStartMs = now;
+    vrProfFrame();
     gpu_collect();
     const double busy = period > waitMs ? period - waitMs : 0.0;
     double sim = busy - s_stageMs[VRPERF_RENDER] - s_stageMs[VRPERF_REDRAW] - s_stageMs[VRPERF_END];
@@ -756,6 +758,9 @@ extern "C" void vrFramePerfFrame(double waitMs, float periodMs, int shouldRender
              s_waitFrames ? s_waitSumMs / (double)s_waitFrames : 0.0, periodMs);
         s_waitSumMs = 0.0;
         s_waitFrames = 0;
+        char xr[512];
+        vrProfLine(xr, sizeof(xr));
+        FLOG("%s", xr);
     }
 }
 

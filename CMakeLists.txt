@@ -239,7 +239,7 @@ list(FILTER SRC_PORT EXCLUDE REGEX ".*(preprocess|pdmain|pdsched|communityart|mp
 # GoldenEye. port/src/gevr_romload.c stands in for them; see that file for what
 # a GoldenEye replacement has to do.
 list(FILTER SRC_PORT EXCLUDE REGEX "port/src/(romdata|mod)\.c$")
-# port/vr/vr_screen.cpp added 2026-09-20; gevr_setup.c 2026-09-20; port/fast3d/gevr_texpack.cpp 2026-09-25; port/vr/vr_haptics.cpp 2026-09-29; port/vr/vr_motion.c, vr_motion_math.c 2026-10-04; vr_aim_math.c 2026-10-04; vr_screen_math.c 2026-10-04; vr_watch_terminal.cpp 2026-10-04; vr_cinema.cpp, vr_cinema_math.c 2026-10-04; vr_upright_math.c, vr_scope_math.c 2026-10-04 (touching this line makes the glob re-run)
+# port/vr/vr_screen.cpp added 2026-09-20; gevr_setup.c 2026-09-20; port/fast3d/gevr_texpack.cpp 2026-09-25; port/vr/vr_haptics.cpp 2026-09-29; port/vr/vr_motion.c, vr_motion_math.c 2026-10-04; vr_aim_math.c 2026-10-04; vr_screen_math.c 2026-10-04; vr_watch_terminal.cpp 2026-10-04; vr_cinema.cpp, vr_cinema_math.c 2026-10-04; vr_upright_math.c, vr_scope_math.c 2026-10-04; vr_xr_prof.cpp, vr_refresh_math.c 2026-10-05 (touching this line makes the glob re-run)
 file(GLOB_RECURSE SRC_PORT_CXX "${CMAKE_SOURCE_DIR}/port/*.cpp")
 list(FILTER SRC_PORT_CXX EXCLUDE REGEX "port/(external|tests)/.*")
 
@@ -370,6 +370,11 @@ if(ANDROID)
     file(GLOB SFVR_SRC "${CMAKE_SOURCE_DIR}/third_party/sfvr/src/*.c")
     target_sources(gevr PRIVATE ${SFVR_SRC})
     target_include_directories(gevr PRIVATE "${CMAKE_SOURCE_DIR}/third_party/sfvr/include")
+    # [vr-xr] (port/vr/vr_xr_prof.cpp): the OpenXR calls that cost frame time, counted at link time
+    foreach(fn xrAcquireSwapchainImage xrWaitSwapchainImage xrReleaseSwapchainImage xrEndFrame xrSyncActions
+               xrGetActionStateBoolean xrGetActionStateFloat xrGetActionStateVector2f xrGetActionStatePose xrLocateSpace)
+      target_link_options(gevr PRIVATE "-Wl,--wrap=${fn}")
+    endforeach()
   endif()
   target_link_libraries(gevr ${LIBS} openxr_loader juice-static opus steamaudio)
   target_link_options(gevr PRIVATE -Wl,--error-limit=0)
