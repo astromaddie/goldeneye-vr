@@ -2061,6 +2061,7 @@ void gfx_vr_scope_prepare(void)
 #ifdef GEVR_STEAM_FRAME
 #include <cmath>
 #include "../vr/vr_frame.h"   // vr-diag.ini dump_scope
+#include "../vr/vr_diag.h"    // vr-diag.ini diag_cinema_draws
 #ifndef GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_NUM_VIEWS_OVR
 #define GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_NUM_VIEWS_OVR 0x9630
 #endif
@@ -2378,7 +2379,58 @@ GLuint gfx_vr_scope_texture(int hand)
 
 static void gevr_gl_trace_draw(bool after);   // vr-diag.ini diag_gl
 
+#ifdef GEVR_STEAM_FRAME
+/*
+ * vr-diag.ini diag_cinema_draws=N (round-3 wear: fence cards against the railing at the end of
+ * Dam's intro): on the 3D cinema's Nth pass, one [vr-cinema-draw] line per draw: how many of its
+ * vertices the shader keeps at the screen plane (2D: w = 1 and the marker values), the w range, the
+ * NDC box, the texture, the depth class (0 no test, 1 test without compare, 2 decal, 3 xlu, 4 no
+ * update, 5 opaque) and the stride; then a count of 2D draws that are not full-screen.
+ */
+unsigned gevrCinemaPassNo;   // gfx_pc.cpp counts the cinema passes as they begin
+static void gevr_cinema_draw_trace(const float* buf, size_t len, size_t tris)
+{
+    const unsigned s_cinemaPassNo = gevrCinemaPassNo;
+    if (!gVrCinemaPass || gForceFlatShaderForMenu || gevrDiag()->diag_cinema_draws <= 0
+        || s_cinemaPassNo != (unsigned)gevrDiag()->diag_cinema_draws || tris == 0) {
+        return;
+    }
+    static unsigned drawNo, flat2d;
+    static unsigned loggedPass;
+    if (loggedPass != s_cinemaPassNo) {
+        loggedPass = s_cinemaPassNo;
+        drawNo = flat2d = 0;
+    }
+    const size_t verts = 3 * tris, stride = len / verts;
+    unsigned n2d = 0;
+    float wmin = 1e30f, wmax = -1e30f, x0 = 1e30f, x1 = -1e30f, y0 = 1e30f, y1 = -1e30f;
+    for (size_t v = 0; v < verts; v++) {
+        const float* p = buf + v * stride;
+        const float wm1 = fabsf(p[3] - 1.0f);
+        if (wm1 == 0.0f || wm1 == 7.0f || wm1 == 8.0f || wm1 == 9.0f) n2d++;
+        wmin = fminf(wmin, p[3]);
+        wmax = fmaxf(wmax, p[3]);
+        if (fabsf(p[3]) > 1e-6f) {
+            x0 = fminf(x0, p[0] / p[3]); x1 = fmaxf(x1, p[0] / p[3]);
+            y0 = fminf(y0, p[1] / p[3]); y1 = fmaxf(y1, p[1] / p[3]);
+        }
+    }
+    drawNo++;
+    const bool full = x1 - x0 > 1.9f && y1 - y0 > 1.5f;
+    if (n2d == verts && !full) flat2d++;
+    LOGI("[vr-cinema-draw] pass %u draw %u tris %u 2d %u/%u w %.2f..%.2f ndc x %.2f..%.2f y %.2f..%.2f tex %u z %d stride %u%s",
+         s_cinemaPassNo, drawNo, (unsigned)tris, n2d, (unsigned)verts, wmin, wmax, x0, x1, y0, y1, s_boundTex[0],
+         s_zDebugClass, (unsigned)stride, n2d == verts && !full ? " FLAT-2D" : (n2d > 0 && n2d < verts ? " MIXED" : ""));
+    if ((drawNo % 50) == 0) {
+        LOGI("[vr-cinema-draw] pass %u: %u draws so far, %u flat 2D (not full screen)", s_cinemaPassNo, drawNo, flat2d);
+    }
+}
+#endif
+
 static void gfx_opengl_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_vbo_num_tris) {
+#ifdef GEVR_STEAM_FRAME
+    gevr_cinema_draw_trace(buf_vbo, buf_vbo_len, buf_vbo_num_tris);
+#endif
 
     const bool lineMode = netActiveLineMode() && !gForceFlatShaderForMenu && !gVrFlatPass &&
         !vr_dl_is_pause_or_menu && buf_vbo[3] != 1.0f;

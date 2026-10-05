@@ -60,6 +60,7 @@ static void apply(const char *key, const char *val)
     else if (!strcmp(key, "msaa")) s_diag.msaa = atoi(val);
     else if (!strcmp(key, "dump_cinema_frame")) s_diag.dump_cinema_frame = atoi(val);
     else if (!strcmp(key, "cinema_sep_mm")) s_diag.cinema_sep_mm = (float)atof(val);
+    else if (!strcmp(key, "diag_cinema_draws")) s_diag.diag_cinema_draws = atoi(val);
     else if (!strcmp(key, "diag_zoom")) {
         float z = (float)atof(val);
         s_diag.diag_zoom = z < -100.0f ? -100.0f : z > 100.0f ? 100.0f : z;

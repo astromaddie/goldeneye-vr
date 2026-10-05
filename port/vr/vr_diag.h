@@ -59,6 +59,7 @@ typedef struct GevrDiag {
     float cinema_sep_mm;       /* the 3D cinema's camera separation in mm, 0 = the default (64) */
     float diag_zoom;           /* the turn stick held up (+) or down (-) at this % when no controller moves it (the
                                   sniper's zoom while aiming: port/src/input.c), 0 = off */
+    int   diag_cinema_draws;   /* on the 3D cinema's Nth pass, a [vr-cinema-draw] line per draw (2D or 3D, w, box) */
 } GevrDiag;
 
 /* The settings; the file is read on the first call. Never NULL. */

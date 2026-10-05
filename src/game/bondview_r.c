@@ -375,7 +375,11 @@ void bondviewLoadSetupIntroSection(void)
          * game's own behaviour.
          */
         {
+#ifdef GEVR_STEAM_FRAME
+            FILE *f = fopen("gevr_introcam.txt", "r");   /* the data folder: ~/Documents/GoldenEye on the Frame */
+#else
             FILE *f = fopen("/sdcard/Android/data/com.gevr.port/files/gevr_introcam.txt", "r");
+#endif
             if (f != NULL)
             {
                 s32 forced = -1;

@@ -4827,6 +4827,8 @@ extern "C" void gfx_run(Gfx* commands) {
                 if (cinemaPass) {
                     gevrCinemaPassBegin((int)passW, (int)passH);   // the band target, cleared
                     gVrCinemaPass = s_cinemaPass = true;
+                    extern unsigned gevrCinemaPassNo;   // gfx_opengl.cpp, vr-diag.ini diag_cinema_draws
+                    gevrCinemaPassNo++;
                 }
 #endif
                 run_display_list();
