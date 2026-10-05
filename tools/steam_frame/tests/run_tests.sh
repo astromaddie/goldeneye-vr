@@ -45,10 +45,16 @@ done
     "$here/test_vr_upright.c" "$root/port/vr/vr_upright_math.c" -lm -o "$out/test_vr_upright"
 "$out/test_vr_upright"
 
-# the scope lens as optics (port/vr/vr_scope_math.c): a collimated image on the gun's axis, per-eye windows
+# the scope lens (port/vr/vr_scope_math.c): the picture on the eyepiece's disc from each eye, the scope
+# camera on the shot ray, against a reference pinhole and look-at camera; the 4811c1e optics bug reproduced
 "$cc" -std=c11 -Wall -Wextra -Werror -I"$root/port/vr" \
     "$here/test_vr_scope.c" "$root/port/vr/vr_scope_math.c" -lm -o "$out/test_vr_scope"
 "$out/test_vr_scope"
+
+# the menu pointer's quads (port/vr/vr_pointer_math.c): beam and dot always in front of the panel
+"$cc" -std=c11 -Wall -Wextra -Werror -I"$root/port/vr" \
+    "$here/test_vr_pointer.c" "$root/port/vr/vr_pointer_math.c" -lm -o "$out/test_vr_pointer"
+"$out/test_vr_pointer"
 
 # goldeneye-vr.ini: every key the in-game VR settings change, save -> load (port/vr/vr_settings.cpp,
 # vr_settings_defaults.c, vr_haptics.cpp, vr_log.c: the production files)

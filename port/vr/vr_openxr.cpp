@@ -377,6 +377,7 @@ extern GLuint gfx_opengl_get_vr_menu_texture_H(void);// Head HUD texture
 extern GLuint gfx_opengl_get_vr_menu_texture_P(void);// weapon panel texture (issue #10)
 extern GLuint gfx_vr_scope_texture(int hand);        // a hand's scope image (issue #40): GUNRIGHT 0, GUNLEFT 1
 #include "gevr_scope.h"                              // bondview2.c: the per-hand scope (lens, gun pose, lensTan)
+#include "vr_pointer_math.h"                         // the pointer's quads (Frame build)
 #define GEVR_SCOPE_RES 512                           // gfx_opengl.cpp's scope target
 #define GEVR_SCOPE_MIN_DEPTH_M 0.12f                 // the lens's nearest edge stays this far ahead of the eyes
 #define GEVR_SCOPE_TURN_M 0.08f                      // ... and turns toward them within this of it
@@ -2828,65 +2829,114 @@ extern "C" void gevrVrSetEyeBackdrop(int mode) { g_eyeBackdrop = mode; }
 
 #ifdef GEVR_STEAM_FRAME
 /*
- * The menu pointer's own layer (standard.md section 3: the pointer is always on top; GoldenEye
- * wear 2026-10-04: the beam often showed behind the panel). Drawn into the eye image, the beam was
- * under every layer submitted after it: the watch terminal's page and its docked VR settings, the
- * HUD quads, the 3D cinema, the virtual screen whenever the paused world made the eye layer go
- * first. Now it is a projection layer of its own, submitted after every other layer: a two-layer
- * swapchain at half the eye size (about 9 MB against 54 for a full-size one), cleared transparent
- * and drawn every XR frame from that frame's eye views, so it never waits for a game frame and the
- * compositor never reprojects an old beam. The far end of the beam keeps at least about a pixel
- * and a half of this layer's width, so it stays a solid line at that size. Premultiplied, no
- * depth: it shows over the panel it points at, which is the point.
+ * The menu pointer (standard.md section 3: always on top; lessons 80 and 83; vr_pointer_math.h).
+ * Fourth wear (2026-10-04): drawn into the eye layer, the beam hid behind the panels. Round 3
+ * (2026-10-05): on its own projection layer, submitted after every other layer, it still showed
+ * behind the floating screen on the title screen and in the menus: SteamVR on the Frame keeps its
+ * quads over that projection layer whatever the order, and depth-composites quads that meet. So the
+ * pointer is two quad layers, submitted last of all: the beam, a strip along the ray that stops
+ * 2 cm in front of the surface, and the dot, laid flat on the surface 1 cm in front of it. Both
+ * nearer than the panel at every point, last in the list: on top by order and by depth.
+ * Their images are fixed (the beam's cross-section and fade, the soft dot), written once into one
+ * small swapchain (GEVR_PTR_TEX_W x GEVR_PTR_TEX_H: the beam's strip on the left, the dot on the
+ * right), so the pointer costs no swapchain cycle a frame (lesson 38). Premultiplied white.
  */
-#define GEVR_PTR_LAYER_SCALE 0.5f
+#define GEVR_PTR_BEAM_TEX_W 16
+#define GEVR_PTR_DOT_TEX 64
+#define GEVR_PTR_TEX_W (GEVR_PTR_BEAM_TEX_W + GEVR_PTR_DOT_TEX)
+#define GEVR_PTR_TEX_H 128
 static XrSwapchain g_ptrSc = XR_NULL_HANDLE;
-static std::vector<XrSwapchainImageOpenGLESKHR> g_ptrImages;
-static uint32_t g_ptrScW, g_ptrScH;
-static GLuint g_ptrFbo;
 static bool g_ptrScFailed;
 static bool g_ptrShown;
 
 static bool vr_pointer_chain_ensure(void)
 {
-    uint32_t w = (uint32_t)((float)g_internalRenderWidth * GEVR_PTR_LAYER_SCALE + 0.5f);
-    uint32_t h = (uint32_t)((float)g_internalRenderHeight * GEVR_PTR_LAYER_SCALE + 0.5f);
-    if (w < 64) w = 64;
-    if (h < 64) h = 64;
-    if (g_ptrSc != XR_NULL_HANDLE && g_ptrScW == w && g_ptrScH == h) {
+    if (g_ptrSc != XR_NULL_HANDLE) {
         return true;
     }
     if (g_ptrScFailed || g_vrState.session == XR_NULL_HANDLE) {
         return false;
     }
-    if (g_ptrSc != XR_NULL_HANDLE) {
-        xrDestroySwapchain(g_ptrSc);
-        g_ptrSc = XR_NULL_HANDLE;
-        g_ptrImages.clear();
-    }
     XrSwapchainCreateInfo info = {XR_TYPE_SWAPCHAIN_CREATE_INFO};
-    info.usageFlags  = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
+    info.createFlags = XR_SWAPCHAIN_CREATE_STATIC_IMAGE_BIT;
+    info.usageFlags  = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT;
     info.format      = g_eyeSwapFormat != 0 ? g_eyeSwapFormat : gevrVrQuadSwapchainFormat();   // as the eyes: the same raw writes
     info.sampleCount = 1;
-    info.width       = w;
-    info.height      = h;
+    info.width       = GEVR_PTR_TEX_W;
+    info.height      = GEVR_PTR_TEX_H;
     info.faceCount   = 1;
-    info.arraySize   = 2;   // left eye, right eye (the pointer's program declares two views)
+    info.arraySize   = 1;
     info.mipCount    = 1;
-    if (XR_FAILED(xrCreateSwapchain(g_vrState.session, &info, &g_ptrSc))) {
-        LOGE("[vr] pointer layer: xrCreateSwapchain %ux%u x2 failed: no pointer", w, h);
+    XrResult r = xrCreateSwapchain(g_vrState.session, &info, &g_ptrSc);
+    if (XR_FAILED(r)) {
+        info.createFlags = 0;   // a runtime without static images: an ordinary one, written once all the same
+        r = xrCreateSwapchain(g_vrState.session, &info, &g_ptrSc);
+    }
+    if (XR_FAILED(r)) {
+        LOGE("[vr] pointer quads: xrCreateSwapchain %dx%d failed (%d): no pointer", GEVR_PTR_TEX_W, GEVR_PTR_TEX_H, (int)r);
         g_ptrSc = XR_NULL_HANDLE;
         g_ptrScFailed = true;
         return false;
     }
     uint32_t n = 0;
     xrEnumerateSwapchainImages(g_ptrSc, 0, &n, nullptr);
-    g_ptrImages.resize(n, {XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR});
-    xrEnumerateSwapchainImages(g_ptrSc, n, &n, reinterpret_cast<XrSwapchainImageBaseHeader *>(g_ptrImages.data()));
-    g_ptrScW = w;
-    g_ptrScH = h;
-    LOGI("[vr] pointer layer: swapchain %ux%u, two layers (format 0x%llx), submitted last, over every other layer",
-         w, h, (unsigned long long)info.format);
+    std::vector<XrSwapchainImageOpenGLESKHR> images(n, {XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR});
+    xrEnumerateSwapchainImages(g_ptrSc, n, &n, reinterpret_cast<XrSwapchainImageBaseHeader *>(images.data()));
+    // the images, premultiplied white; GL rows bottom up: row 0 is the quad's -Y (the beam's hand end)
+    std::vector<uint8_t> px((size_t)GEVR_PTR_TEX_W * GEVR_PTR_TEX_H * 4, 0);
+    auto put = [&px](int x, int y, float a) {
+        const uint8_t v = (uint8_t)(fminf(fmaxf(a, 0.0f), 1.0f) * 255.0f + 0.5f);
+        uint8_t *p = &px[((size_t)y * GEVR_PTR_TEX_W + (size_t)x) * 4];
+        p[0] = p[1] = p[2] = p[3] = v;
+    };
+    auto smooth = [](float e0, float e1, float x) {
+        const float t = fminf(fmaxf((x - e0) / (e1 - e0), 0.0f), 1.0f);
+        return t * t * (3.0f - 2.0f * t);
+    };
+    for (int y = 0; y < GEVR_PTR_TEX_H; y++) {
+        const float along = ((float)y + 0.5f) / (float)GEVR_PTR_TEX_H;   // 0 at the hand, 1 at the end
+        for (int x = 0; x < GEVR_PTR_BEAM_TEX_W; x++) {
+            const float across = ((float)x + 0.5f) / (float)GEVR_PTR_BEAM_TEX_W;
+            const float c = 1.0f - fabsf(across * 2.0f - 1.0f);
+            put(x, y, 0.55f * c * c * smooth(0.0f, 0.35f, along));
+        }
+    }
+    for (int y = 0; y < GEVR_PTR_DOT_TEX; y++) {
+        for (int x = 0; x < GEVR_PTR_DOT_TEX; x++) {
+            const float qx = ((float)x + 0.5f) / (float)GEVR_PTR_DOT_TEX * 2.0f - 1.0f;
+            const float qy = ((float)y + 0.5f) / (float)GEVR_PTR_DOT_TEX * 2.0f - 1.0f;
+            put(GEVR_PTR_BEAM_TEX_W + x, y, 0.95f * (1.0f - smooth(0.55f, 1.0f, sqrtf(qx * qx + qy * qy))));
+        }
+    }
+    // a static swapchain takes exactly one acquire; an ordinary one keeps its last released image
+    uint32_t idx = 0;
+    XrSwapchainImageAcquireInfo acquireInfo = {XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+    XrSwapchainImageWaitInfo waitInfo = {XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+    waitInfo.timeout = XR_INFINITE_DURATION;
+    if (XR_FAILED(xrAcquireSwapchainImage(g_ptrSc, &acquireInfo, &idx)) || XR_FAILED(xrWaitSwapchainImage(g_ptrSc, &waitInfo))) {
+        LOGE("[vr] pointer quads: could not write the image: no pointer");
+        xrDestroySwapchain(g_ptrSc);
+        g_ptrSc = XR_NULL_HANDLE;
+        g_ptrScFailed = true;
+        return false;
+    }
+    vrFrameNoteImage((uint64_t)(uintptr_t)g_ptrSc, images[idx].image);
+    GLint prevTex = 0, prevAlign = 4, prevUnpack = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTex);
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &prevAlign);
+    glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &prevUnpack);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glBindTexture(GL_TEXTURE_2D, images[idx].image);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, GEVR_PTR_TEX_W, GEVR_PTR_TEX_H, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+    glBindTexture(GL_TEXTURE_2D, (GLuint)prevTex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, prevAlign);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, (GLuint)prevUnpack);
+    gevrGlProbe("the pointer quads' image");
+    XrSwapchainImageReleaseInfo releaseInfo = {XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+    xrReleaseSwapchainImage(g_ptrSc, &releaseInfo);
+    LOGI("[vr] pointer quads: swapchain %dx%d (%s, format 0x%llx), beam and dot submitted last, in front of the panel",
+         GEVR_PTR_TEX_W, GEVR_PTR_TEX_H, info.createFlags ? "static" : "written once", (unsigned long long)info.format);
     return true;
 }
 
@@ -2896,88 +2946,60 @@ static void vr_pointer_layer_destroy(void)
         xrDestroySwapchain(g_ptrSc);
         g_ptrSc = XR_NULL_HANDLE;
     }
-    g_ptrImages.clear();
-    if (g_ptrFbo) {
-        glDeleteFramebuffers(1, &g_ptrFbo);
-        g_ptrFbo = 0;
-    }
-    g_ptrScW = g_ptrScH = 0;
+    g_ptrScFailed = false;
     g_ptrShown = false;
 }
 
-// This XR frame's pointer layer, or false when nothing points (no layer is submitted then).
-static bool vr_pointer_layer(XrCompositionLayerProjection *layer, XrCompositionLayerProjectionView views[2])
+// This XR frame's pointer: the beam and the dot as quad layers (0, 1 or 2 of them), play space.
+static int vr_pointer_quads(XrCompositionLayerQuad out[2])
 {
     VrPointerHand p;
     bool grid = false;
-    const bool on = vr_pointer_shape(p, grid);
+    const bool on = vr_pointer_shape(p, grid) && p.hit;
     if (on != g_ptrShown) {
         g_ptrShown = on;
-        LOGI("[vr] pointer layer: %s", on ? "shown (its own layer, last)" : "hidden");
+        LOGI("[vr] pointer quads: %s", on ? "shown (beam and dot, last)" : "hidden");
     }
-    if (!on || !glFramebufferTextureMultiviewOVR || !vr_pointer_chain_ensure()) {
-        return false;
+    if (!on || !vr_pointer_chain_ensure()) {
+        return 0;
     }
-    uint32_t idx = 0;
-    XrSwapchainImageAcquireInfo acquireInfo = {XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-    if (XR_FAILED(xrAcquireSwapchainImage(g_ptrSc, &acquireInfo, &idx))) {
-        return false;
-    }
-    XrSwapchainImageWaitInfo waitInfo = {XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
-    waitInfo.timeout = XR_INFINITE_DURATION;
-    xrWaitSwapchainImage(g_ptrSc, &waitInfo);
-    const GLuint image = g_ptrImages[idx].image;
-    vrFrameNoteImage((uint64_t)(uintptr_t)g_ptrSc, image);
-
-    GLint prevFbo = 0, vpRect[4];
-    GLfloat prevClear[4];
-    GLboolean prevMask[4];
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
-    glGetIntegerv(GL_VIEWPORT, vpRect);
-    glGetFloatv(GL_COLOR_CLEAR_VALUE, prevClear);
-    glGetBooleanv(GL_COLOR_WRITEMASK, prevMask);
-    const GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
-    if (!g_ptrFbo) glGenFramebuffers(1, &g_ptrFbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, g_ptrFbo);
-    glFramebufferTextureMultiviewOVR(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, image, 0, 0, 2);
-    glViewport(0, 0, (GLsizei)g_ptrScW, (GLsizei)g_ptrScH);
-    glDisable(GL_SCISSOR_TEST);
-    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-
-    float vp[32];
-    vr_eye_vp_play(vp);
-    const XrFovf &f = g_frameViews[1].fov;
-    const float tanPerPx = (tanf(f.angleRight) - tanf(f.angleLeft)) / (float)g_ptrScW;
-    vr_pointer_geometry(p, grid, vp, 0.75f * tanPerPx);
-
-    glFramebufferTextureMultiviewOVR(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, 0, 0, 0, 2);
-    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prevFbo);
-    glViewport(vpRect[0], vpRect[1], vpRect[2], vpRect[3]);
-    glClearColor(prevClear[0], prevClear[1], prevClear[2], prevClear[3]);
-    glColorMask(prevMask[0], prevMask[1], prevMask[2], prevMask[3]);
-    if (scissor) glEnable(GL_SCISSOR_TEST);
-    gevrGlProbe("the pointer layer");
-
-    XrSwapchainImageReleaseInfo releaseInfo = {XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-    xrReleaseSwapchainImage(g_ptrSc, &releaseInfo);
-
-    for (int e = 0; e < 2; e++) {
-        views[e] = {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW};
-        views[e].pose = g_frameViews[e].pose;
-        views[e].fov = g_frameViews[e].fov;
-        views[e].subImage.swapchain = g_ptrSc;
-        views[e].subImage.imageArrayIndex = (uint32_t)e;
-        views[e].subImage.imageRect.offset = {0, 0};
-        views[e].subImage.imageRect.extent = {(int32_t)g_ptrScW, (int32_t)g_ptrScH};
-    }
-    *layer = {XR_TYPE_COMPOSITION_LAYER_PROJECTION};
-    layer->layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
-    layer->space = g_vrState.playSpace;
-    layer->viewCount = 2;
-    layer->views = views;
-    return true;
+    // the surface's normal at the spot, from its own u, v mapping (flat or curved screen, the dock)
+    const float du = 0.01f;
+    float pu0[3], pu1[3], pv0[3], pv1[3];
+    vr_screen_uv_to_world(p.u - du, p.v, pu0);
+    vr_screen_uv_to_world(p.u + du, p.v, pu1);
+    vr_screen_uv_to_world(p.u, p.v - du, pv0);
+    vr_screen_uv_to_world(p.u, p.v + du, pv1);
+    const float tu[3] = { pu1[0] - pu0[0], pu1[1] - pu0[1], pu1[2] - pu0[2] };
+    const float tv[3] = { pv1[0] - pv0[0], pv1[1] - pv0[1], pv1[2] - pv0[2] };
+    const float nrm[3] = { tu[1] * tv[2] - tu[2] * tv[1], tu[2] * tv[0] - tu[0] * tv[2], tu[0] * tv[1] - tu[1] * tv[0] };
+    float head[3];
+    vr_screen_head(head);
+    static const float worldUp[3] = { 0.0f, 1.0f, 0.0f };
+    const float dh = sqrtf((p.h[0] - head[0]) * (p.h[0] - head[0]) + (p.h[1] - head[1]) * (p.h[1] - head[1])
+                           + (p.h[2] - head[2]) * (p.h[2] - head[2]));
+    // the beam 7 mm wide, wider far off so it stays a line (about 0.1 degree); the dot 0.9 % of its distance
+    const float beamHalf = fmaxf(0.0035f, dh * 0.0009f);
+    GevrPtrQuad beam, dot;
+    const int got = gevrPointerQuads(p.o, p.h, nrm, head, worldUp, beamHalf, dh * 0.009f, &beam, &dot);
+    int n = 0;
+    auto fill = [&](const GevrPtrQuad &q, int x, int w, int h) {
+        XrCompositionLayerQuad &l = out[n++];
+        l = {XR_TYPE_COMPOSITION_LAYER_QUAD};
+        l.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        l.space = g_vrState.playSpace;
+        l.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+        l.subImage.swapchain = g_ptrSc;
+        l.subImage.imageArrayIndex = 0;
+        l.subImage.imageRect.offset = {x, 0};
+        l.subImage.imageRect.extent = {w, h};
+        l.pose.position = { q.pos[0], q.pos[1], q.pos[2] };
+        l.pose.orientation = { q.quat[0], q.quat[1], q.quat[2], q.quat[3] };
+        l.size = { q.size[0], q.size[1] };
+    };
+    if (got & 1) fill(beam, 0, GEVR_PTR_BEAM_TEX_W, GEVR_PTR_TEX_H);
+    if (got & 2) fill(dot, GEVR_PTR_BEAM_TEX_W, GEVR_PTR_DOT_TEX, GEVR_PTR_DOT_TEX);
+    return n;
 }
 #endif
 
@@ -4709,7 +4731,7 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
     // The Frame build's pointer is none of these: its own layer goes last of all (vr_pointer_layer).
     const bool termUnder = nTerm > 0 && g_screenVisible && g_eyeBackdrop != 1;
     int numLayers = 0;
-    const XrCompositionLayerBaseHeader* layers[16];   // screen or cinema, eyes, four menus, two scopes, two watch panels, fade, pointer, spare
+    const XrCompositionLayerBaseHeader* layers[16];   // screen or cinema, eyes, four menus, two scopes, two watch panels, fade, pointer beam and dot, spare
     const XrCompositionLayerBaseHeader* screenHdr = screenCurved
         ? reinterpret_cast<const XrCompositionLayerBaseHeader*>(&screenCyl)
         : reinterpret_cast<const XrCompositionLayerBaseHeader*>(&screenLayer);
@@ -4747,11 +4769,13 @@ static void vr_submit_frame(XrFrameState& frameState, const std::array<XrView, 2
     }
 #ifdef GEVR_STEAM_FRAME
     if (submitFade) layers[numLayers++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&fadeLayer);
-    // the menu pointer, over everything else (standard.md section 3)
-    XrCompositionLayerProjection ptrLayer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
-    XrCompositionLayerProjectionView ptrViews[2];
-    if (vr_pointer_layer(&ptrLayer, ptrViews)) {
-        layers[numLayers++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&ptrLayer);
+    // the menu pointer, over everything else (standard.md section 3): its beam and dot, the very
+    // last layers in every mode (title, front end, cinema, paused watch and dock, VR settings, HUD,
+    // scope), and in front of the panel by depth (vr_pointer_quads)
+    XrCompositionLayerQuad ptrQuads[2];
+    const int nPtr = vr_pointer_quads(ptrQuads);
+    for (int i = 0; i < nPtr; i++) {
+        layers[numLayers++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&ptrQuads[i]);
     }
     if (vrFrameDumpEyesWritten()) {
         vr_compose_dump(layers, numLayers);   // vr-comp0/1.bmp: the layers as the compositor gets them
