@@ -6,6 +6,10 @@
 #include "vr_settings.h"
 #include "vr_screen.h"
 #include "vr_haptics.h"
+#include "vr_log.h"
+#ifdef GEVR_STEAM_FRAME
+#include "vr_refresh_math.h"
+#endif
 
 extern "C" float inputRumbleGetStrength(int playernum);
 extern "C" void inputRumbleSetStrength(int playernum, int strength);
@@ -23,6 +27,28 @@ extern "C" void gevrSndApplySfxVolume(unsigned short);
 // A save before it writes every default over the player's file: the launcher's
 // first name did, at launcher start, and reset everything it held.
 static bool s_settingsLoaded = false;
+
+// DisplayVersion as read from the file (0: written before 2026-10-05), see GEVR_DISPLAY_SETTINGS_VERSION.
+static int s_displayVersion = 0;
+
+// The old display defaults become the new ones once (Frame build). `refresh`: DisplayHz was read too
+// (vrSettingsReadDisplay reads only the eye keys).
+static void vrSettingsMigrateDisplay(bool refresh)
+{
+#ifdef GEVR_STEAM_FRAME
+    if (s_displayVersion >= GEVR_DISPLAY_SETTINGS_VERSION) return;
+    if (refresh && VrRefreshRate == 90) {
+        VrRefreshRate = GEVR_REFRESH_AUTO;
+        vr_log("[vr] settings: DisplayHz 90 (the old default) -> Auto (120 Hz with the fallback)");
+    }
+    if (fabsf(VrRenderScale - 1.0f) < 0.01f) {
+        VrRenderScale = GEVR_FRAME_RENDER_SCALE;
+        if (refresh) vr_log("[vr] settings: RenderScale 1.00 (the old default) -> Auto (the eye about 2160)");
+    }
+#else
+    (void)refresh;
+#endif
+}
 
 extern "C" void vrSettingsSave(void)
 {
@@ -100,10 +126,18 @@ extern "C" void vrSettingsSave(void)
     fprintf(f, "ScreenCurved=%d\n", VrScreenCurved);
     fprintf(f, "; Metres above (+) or below (-) eye level; set by grabbing the screen with both grips.\n");
     fprintf(f, "ScreenHeight=%.2f\n", VrScreenHeight);
+#ifdef GEVR_STEAM_FRAME
+    fprintf(f, "; Display refresh rate in Hz (VR settings): 0 = Auto (the default: 120, stepping down\n");
+    fprintf(f, "; to 90 and then 72 if the game can't keep up while you wear the headset), or a fixed\n");
+    fprintf(f, "; 72, 90 or 120. The game runs at 60 Hz: 120 shows each frame exactly twice.\n");
+    fprintf(f, "; 120 also needs GoldenEyeVR's refresh rate set to 120 in SteamVR's per-app settings.\n");
+#else
     fprintf(f, "; Display refresh rate in Hz (launcher): 72, 90 (the default) or 120. The game\n");
     fprintf(f, "; runs at 60 Hz: 120 shows each frame exactly twice (smoothest hands) but works\n");
     fprintf(f, "; the headset hardest. 0 = the headset's default. Used when the headset offers it.\n");
+#endif
     fprintf(f, "DisplayHz=%d\n", VrRefreshRate);
+    fprintf(f, "DisplayVersion=%d\n", GEVR_DISPLAY_SETTINGS_VERSION);
     fprintf(f, "; Stereo: darken the edges of the view while moving or smooth-turning, to\n");
     fprintf(f, "; ease motion sickness. 0 = off, up to 1 = strongest.\n");
     fprintf(f, "ComfortVignette=%.2f\n", VrComfortVignette);
@@ -118,8 +152,9 @@ extern "C" void vrSettingsSave(void)
     fprintf(f, "; The paused watch (Steam Frame): 1 = the Q-Branch terminal, a sharp panel 0.9 m ahead\n");
     fprintf(f, "; with the watch's pages; 0 = the big screen with the zoomed watch. From the next pause.\n");
     fprintf(f, "WatchStyle=%d\n", VrWatchStyle);
-    fprintf(f, "; Steam Frame: the eye images' resolution over the headset's recommended one,\n");
-    fprintf(f, "; 0.75 to 1.5, from the next start; and their anti-aliasing (MSAA samples:\n");
+    fprintf(f, "; Steam Frame: the eye images' resolution: 0 = Auto (the default, about the panel's\n");
+    fprintf(f, "; 2160 pixels), or 0.75 to 1.5 times the headset's recommended size; from the next\n");
+    fprintf(f, "; start. And their anti-aliasing (MSAA samples:\n");
     fprintf(f, "; 1 = off, 2 or 4), at once. Both on the VR settings' Graphics page.\n");
     fprintf(f, "RenderScale=%.2f\n", VrRenderScale);
     fprintf(f, "EyeMsaa=%d\n", VrMsaa);
@@ -230,7 +265,12 @@ static bool vrSettingsLoadInt(const char *key, int ival)
     else if (strcmp(key, "CinemaDepth") == 0) VrCinemaDepth = vrSettingsClampCinemaDepth(ival);
     /* DisplayHz replaces RefreshRate, whose 120 was only ever the old default
      * (no option set it): the new default, 90, applies to existing installs. */
+#ifdef GEVR_STEAM_FRAME
+    else if (strcmp(key, "DisplayHz") == 0) VrRefreshRate = gevrRefreshClampSetting(ival);
+#else
     else if (strcmp(key, "DisplayHz") == 0) VrRefreshRate = ival < 0 ? 0 : ival;
+#endif
+    else if (strcmp(key, "DisplayVersion") == 0) s_displayVersion = ival;
     else if (strcmp(key, "MusicVolume") == 0) VrMusicVolume = ival <= 0 ? 0.0f : (ival >= 1 ? 1.0f : (float)ival);
     else if (strcmp(key, "VoiceVolume") == 0) VrVoiceVolume = ival <= 0 ? 0.0f : (ival >= 1 ? 1.0f : (float)ival);
     else if (strcmp(key, "SfxVolume") == 0) VrSfxVolume = ival <= 0 ? 0.0f : 1.0f;
@@ -337,10 +377,19 @@ static bool vrSettingsLoadFloat(const char *key, float fval, int *gunOffRead, fl
     return true;
 }
 
-// RenderScale: 0.75..1.5, else the default (a hand-edited 0 or a typo must not shrink the eyes away).
+// RenderScale: 0 = Auto, else 0.75..1.5 (a hand-edited 0, a negative or a typo is Auto: never no eyes).
+extern "C" float vrSettingsEyeScale(float renderScale, int recommendedW)
+{
+    if (renderScale > 0.0f) return renderScale;
+    if (recommendedW <= 0) return 1.0f;
+    float k = (float)GEVR_FRAME_RENDER_AUTO_EYE / (float)recommendedW;
+    return k < 0.5f ? 0.5f : k > 2.0f ? 2.0f : k;
+}
+
 extern "C" float vrSettingsClampRenderScale(float scale)
 {
-    if (!(scale > 0.0f)) return 1.0f;
+    if (!(scale > 0.0f)) return 0.0f;   // Auto (0), and junk
+
     if (scale < RENDER_SCALE_MIN) return RENDER_SCALE_MIN;
     if (scale > RENDER_SCALE_MAX) return RENDER_SCALE_MAX;
     return scale;
@@ -369,11 +418,14 @@ extern "C" void vrSettingsReadDisplay(void)
     if (!f) return;
     char line[128];
     float fval;
+    s_displayVersion = 0;
     while (fgets(line, sizeof(line), f)) {
         if (sscanf(line, "RenderScale=%f", &fval) == 1) VrRenderScale = vrSettingsClampRenderScale(fval);
         else if (sscanf(line, "EyeMsaa=%f", &fval) == 1) VrMsaa = vrSettingsClampMsaa((int)fval);
+        else if (sscanf(line, "DisplayVersion=%f", &fval) == 1) s_displayVersion = (int)fval;
     }
     fclose(f);
+    vrSettingsMigrateDisplay(false);
 }
 
 extern "C" void vrSettingsLoad(void)
@@ -382,6 +434,7 @@ extern "C" void vrSettingsLoad(void)
     vrHapticsInit();
     FILE *f = fopen(VR_INI_PATH, "r");
     if (!f) return;
+    s_displayVersion = 0;
 
     char line[128];
     char key[64];
@@ -451,6 +504,7 @@ extern "C" void vrSettingsLoad(void)
     }
 
     fclose(f);
+    vrSettingsMigrateDisplay(true);
 
     unsigned short mVol = (unsigned short)(VrMusicVolume * 32767.0f);
     set_mTrack2Vol(mVol);

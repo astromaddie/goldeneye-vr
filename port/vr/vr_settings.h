@@ -49,15 +49,25 @@ extern float VrComfortVignette;
 extern int VrEvenMovement;
 extern int VrSmoothStairs;
 extern float VrSwayStrength;
-// Display refresh rate in Hz, 0 = the runtime's default (vr_openxr.cpp).
+// Display refresh rate in Hz (vr_openxr.cpp). Frame build: 0 = Auto, the default (120 Hz falling
+// back to 90 and 72 while worn, vr_refresh_math.h), or a fixed 72, 90 or 120. Quest build: 0 = the
+// runtime's default, 90 the default.
 extern int VrRefreshRate;
+// The display keys' defaults changed on 2026-10-05 (standard.md section 9: Auto 120 Hz, a 2160 eye).
+// A goldeneye-vr.ini without DisplayVersion=2 that holds the old defaults (DisplayHz=90,
+// RenderScale=1.00) takes the new ones once; what the player picked otherwise stays.
+#define GEVR_DISPLAY_SETTINGS_VERSION 2
 // The paused watch (Frame build): 1 = the Q-Branch terminal, 0 = the big screen (vr_watch_terminal.h).
 extern int VrWatchStyle;
 // Frame build: the eye buffers' size over the runtime's recommended one (from the next start)
 // and their MSAA samples (1, 2 or 4; live). vrSettingsReadDisplay reads both before the session.
 #define RENDER_SCALE_MIN 0.75f
 #define RENDER_SCALE_MAX 1.5f
-#define GEVR_FRAME_RENDER_SCALE 1.0f   // the defaults, measured: VR_ARCHITECTURE.md section 11
+// RenderScale 0 = Auto, the default (standard.md section 9): the eye about the panel's own 2160, whatever
+// the runtime recommends (1728 by default on the Frame, so 1.25; 2160 with SteamVR's per-app resolution
+// override at 2160, so 1.0). Any other value multiplies the recommended size. Measured: section 11.
+#define GEVR_FRAME_RENDER_SCALE 0.0f
+#define GEVR_FRAME_RENDER_AUTO_EYE 2160
 #define GEVR_FRAME_MSAA 2
 extern float VrRenderScale;
 extern int VrMsaa;
@@ -66,6 +76,9 @@ extern "C" {
 #endif
 void vrSettingsReadDisplay(void);
 float vrSettingsClampRenderScale(float scale);
+// The scale this session renders at: RenderScale, or for Auto (0) the one that makes a
+// `recommendedW`-wide eye about GEVR_FRAME_RENDER_AUTO_EYE wide (0.5..2.0).
+float vrSettingsEyeScale(float renderScale, int recommendedW);
 int vrSettingsClampMsaa(int samples);
 #ifdef __cplusplus
 }

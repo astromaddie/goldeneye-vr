@@ -40,11 +40,14 @@
 #  include "vr_system.h"
 #  include "vr_watch_terminal.h"
 #  include "vr_cinema.h"
+#  include "vr_refresh_math.h"
+#  include "vr_xr_prof.h"
 // goldeneye-vr.ini's eye buffer keys (vr_settings.h, vr_settings_defaults.c)
 extern float VrRenderScale;
 extern int VrMsaa;
 extern "C" void vrSettingsReadDisplay(void);
 extern "C" float vrSettingsClampRenderScale(float scale);
+extern "C" float vrSettingsEyeScale(float renderScale, int recommendedW);
 extern "C" int vrSettingsClampMsaa(int samples);
 #endif
 
@@ -526,13 +529,111 @@ extern int VrRefreshRate;
 static void vr_request_refresh_rate(void);
 /* the launcher's Start (vr_launcher.cpp): the session began before it was shown */
 extern "C" void vr_apply_refresh_rate(void) { vr_request_refresh_rate(); }
+#ifdef GEVR_STEAM_FRAME
+/*
+ * Frame build (standard.md section 9): DisplayHz 0 = Auto asks for 120 Hz and steps down to 90 and
+ * then 72 after two 10 s windows below 90% of the display's rate while worn (vr_refresh_math.h;
+ * vr_refresh_window below); 72, 90 or 120 are fixed. vr-diag.ini refresh_rate fixes the rate for one
+ * run. SteamVR runs a Steam title at its per-app rate (SteamVR settings, per application), and
+ * XR_FB_display_refresh_rate's list need not show it (Lambda1VR's 120 Hz runs listed only 90), so the
+ * rate asked for is requested whether listed or not; the log has the runtime's answer, and the rate
+ * actually running comes from predictedDisplayPeriod (`[vr] display running at`).
+ */
+static GevrRefresh g_refresh;
+static bool g_refreshFixedByDiag = false;
+
+static void vr_request_rate_hz(int want, const char *why)
+{
+    if (!g_refreshRateSupported || want <= 0) {
+        LOGI("[vr] display: %d Hz wanted (%s) but XR_FB_display_refresh_rate is not enabled", want, why);
+        return;
+    }
+    PFN_xrEnumerateDisplayRefreshRatesFB enumRates = nullptr;
+    PFN_xrRequestDisplayRefreshRateFB request = nullptr;
+    PFN_xrGetDisplayRefreshRateFB current = nullptr;
+    xrGetInstanceProcAddr(g_vrState.instance, "xrEnumerateDisplayRefreshRatesFB", (PFN_xrVoidFunction *)&enumRates);
+    xrGetInstanceProcAddr(g_vrState.instance, "xrRequestDisplayRefreshRateFB", (PFN_xrVoidFunction *)&request);
+    xrGetInstanceProcAddr(g_vrState.instance, "xrGetDisplayRefreshRateFB", (PFN_xrVoidFunction *)&current);
+    if (!enumRates || !request) {
+        return;
+    }
+    uint32_t n = 0;
+    enumRates(g_vrState.session, 0, &n, nullptr);
+    std::vector<float> rates(n);
+    enumRates(g_vrState.session, n, &n, rates.data());
+    char list[96] = "";
+    bool have = false;
+    for (float r : rates) {
+        const size_t len = strlen(list);
+        snprintf(list + len, sizeof(list) - len, "%s%.0f", len ? " " : "", r);
+        if (fabsf(r - (float)want) < 0.5f) have = true;
+    }
+    float now = 0.0f;
+    if (current) current(g_vrState.session, &now);
+    const XrResult res = request(g_vrState.session, (float)want);
+    LOGI("[vr] display: requested %d Hz (%s): result %d; listed by the runtime: %s%s; current %.0f Hz", want, why,
+         (int)res, list[0] ? list : "none", have ? "" : " (not listed: asked anyway)", now);
+}
+
 static void vr_request_refresh_rate(void)
 {
-#ifdef GEVR_STEAM_FRAME
-    const int want = gevrDiag()->refresh_rate > 0 ? gevrDiag()->refresh_rate : VrRefreshRate;
+    const int diagHz = gevrDiag()->refresh_rate;
+    g_refreshFixedByDiag = diagHz > 0;
+    const int setting = diagHz > 0 ? gevrRefreshClampSetting(diagHz) : gevrRefreshClampSetting(VrRefreshRate);
+    const int want = gevrRefreshInit(&g_refresh, setting);
+    vr_request_rate_hz(want, setting == GEVR_REFRESH_AUTO ? "Auto: 120 with the fallback to 90 and 72 while worn"
+                             : diagHz > 0 ? "vr-diag.ini refresh_rate, fixed" : "DisplayHz, fixed");
+}
+
+/*
+ * Once per XR frame (vr_begin_frame_and_update_poses): the 10 s windows the fallback judges, and a
+ * log line whenever the rate the display runs at changes. Worn: the session focused and the runtime
+ * asking for frames, never a force_render run.
+ */
+static void vr_refresh_window(double nowMs, XrDuration periodNs, bool worn)
+{
+    static double winStart = -1.0, lastFrame = -1.0, maxGap = 0.0;
+    static unsigned frames = 0;
+    static bool allWorn = true;
+    static XrDuration loggedPeriod = 0;
+    if (periodNs > 0 && (loggedPeriod == 0 || llabs((long long)(periodNs - loggedPeriod)) > 200000)) {
+        loggedPeriod = periodNs;
+        LOGI("[vr] display running at %.1f Hz (predictedDisplayPeriod %.3f ms)", 1.0e9 / (double)periodNs,
+             (double)periodNs / 1.0e6);
+    }
+    if (winStart < 0.0) {
+        winStart = lastFrame = nowMs;
+        return;
+    }
+    const double gap = nowMs - lastFrame;
+    if (gap > maxGap) maxGap = gap;
+    lastFrame = nowMs;
+    frames++;
+    allWorn = allWorn && worn;
+    const double elapsed = nowMs - winStart;
+    if (elapsed < GEVR_REFRESH_WINDOW_S * 1000.0) return;
+    const double fps = frames * 1000.0 / elapsed;
+    const double displayHz = periodNs > 0 ? 1.0e9 / (double)periodNs : 0.0;
+    const bool counted = allWorn && !g_forceRender && !g_refreshFixedByDiag;
+    const int lowBefore = g_refresh.low;
+    const int next = gevrRefreshWindow(&g_refresh, fps, displayHz, counted ? 1 : 0, maxGap);
+    if (next > 0) {
+        LOGI("[vr] refresh fallback %.0f -> %d Hz: two 10 s windows below %.0f%% while worn (%.1f, then %.1f fps)",
+             displayHz, next, GEVR_REFRESH_LOW_FRACTION * 100.0, g_refresh.lastFps, fps);
+        vr_request_rate_hz(next, "the fallback");
+    } else if (g_refresh.low > lowBefore) {
+        LOGI("[vr] refresh: a low window, %.1f fps at %.0f Hz while worn (%d of %d before a step down)", fps,
+             displayHz, g_refresh.low, GEVR_REFRESH_LOW_WINDOWS);
+    }
+    winStart = nowMs;
+    frames = 0;
+    maxGap = 0.0;
+    allWorn = true;
+}
 #else
+static void vr_request_refresh_rate(void)
+{
     const int want = VrRefreshRate;
-#endif
     if (!g_refreshRateSupported || want <= 0) {
         return;
     }
@@ -559,6 +660,7 @@ static void vr_request_refresh_rate(void)
         LOGI("display: %d Hz not offered, keeping the default", want);
     }
 }
+#endif
 
 // XR_SESSION_STATE_FOCUSED: the game has the controllers (not the system menu).
 static bool g_sessionFocused = false;
@@ -857,15 +959,18 @@ extern "C" bool vr_configure_resolution() {
             s_scaleRead = true;
             vrSettingsReadDisplay();
             const float diagScale = gevrDiag()->render_scale;
-            RENDER_SCALE = diagScale > 0.0f ? std::min(2.0f, std::max(0.5f, diagScale)) : VrRenderScale;
-            LOGI("[vr] render scale %.2f (%s), eye MSAA %dx (%s)", RENDER_SCALE,
-                 diagScale > 0.0f ? "vr-diag.ini render_scale" : "goldeneye-vr.ini RenderScale",
+            RENDER_SCALE = diagScale > 0.0f ? std::min(2.0f, std::max(0.5f, diagScale))
+                                            : vrSettingsEyeScale(VrRenderScale, VrRealRecommendedW);
+            LOGI("[vr] render scale %.3f (%s), eye MSAA %dx (%s)", RENDER_SCALE,
+                 diagScale > 0.0f ? "vr-diag.ini render_scale"
+                 : VrRenderScale > 0.0f ? "goldeneye-vr.ini RenderScale"
+                 : "goldeneye-vr.ini RenderScale Auto: the eye about 2160 from the runtime's recommendation",
                  gevrDiag()->msaa > 0 ? vrSettingsClampMsaa(gevrDiag()->msaa) : VrMsaa,
                  gevrDiag()->msaa > 0 ? "vr-diag.ini msaa" : "goldeneye-vr.ini EyeMsaa");
         }
     }
-    LOGI("[vr] eye width: recommended %d x RENDER_SCALE %.2f (the Quest build's fixed width would be 1832)",
-         VrRealRecommendedW, RENDER_SCALE);
+    LOGI("[vr] eye width: recommended %d x %d, x RENDER_SCALE %.3f = %d (the Quest build's fixed width would be 1832)",
+         VrRealRecommendedW, VrRealRecommendedH, RENDER_SCALE, (int)(VrRealRecommendedW * RENDER_SCALE));
 #else
     constexpr uint32_t VR_FIXED_WIDTH = 1832;
 #endif
@@ -5125,6 +5230,8 @@ extern "C" bool vr_begin_frame_and_update_poses()
     }
     vrFramePerfFrame(vrFrameNowMs() - waitT0, (float)(g_frameState.predictedDisplayPeriod / 1.0e6),
                      (int)g_frameState.shouldRender);
+    vr_refresh_window(vrFrameNowMs(), g_frameState.predictedDisplayPeriod,
+                      g_sessionFocused && runtimeShouldRender && !g_synthHead);
     vrFrameDumpFrameBegin(g_xrFrameCount);
     gevrDiagFrameTick(vrFrameNowMs());
     if (g_xrFrameCount <= 3 || g_xrFrameCount % 720 == 0) {
