@@ -662,7 +662,42 @@ XrResult create_vr_controllers_complete() {
 }
 
 // === INPUT READING FUNCTION (called every frame) ===
+#ifdef GEVR_STEAM_FRAME
+#include "vr_xr_prof.h"
+#include <ctime>
+/*
+ * Frame build, frame time (VR_ARCHITECTURE.md section 11; skill lesson 40): xrSyncActions and the
+ * ~40 action-state queries are synced at most about every 12 ms when the display runs above 100 Hz,
+ * about the game's own 60 Hz tick: at 120 Hz every other XR frame reuses the last buttons and sticks. The hands' poses (xrLocateSpace) are
+ * located every XR frame as before. vr-diag.ini perf_legacy bit 4 queries every XR frame again.
+ */
+static bool vr_input_actions_due(void)
+{
+    static double last = -1.0, prevCall = -1.0, period = 0.0;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    const double now = ts.tv_sec * 1000.0 + ts.tv_nsec / 1.0e6;
+    if (prevCall >= 0.0 && now > prevCall && now - prevCall < 50.0) {
+        period = period > 0.0 ? period + 0.1 * ((now - prevCall) - period) : now - prevCall;
+    }
+    prevCall = now;
+    // only above 100 Hz: at 90 or 72 every XR frame is closer to a game tick than 12 ms
+    if ((gevrDiag()->perf_legacy & GEVR_PERF_LEGACY_INPUT) || period <= 0.0 || period > 10.0 || last < 0.0
+        || now - last >= 12.0 || now < last) {
+        last = now;
+        return true;
+    }
+    vrProfCount(VRPROF_INPUT_SKIPPED);
+    return false;
+}
+#endif
+
 XrResult update_vr_controllers(XrTime predicted_time) {
+#ifdef GEVR_STEAM_FRAME
+    const bool queryActions = vr_input_actions_due();
+#else
+    const bool queryActions = true;
+#endif
     // 1. Sync the ActionSet
     XrActiveActionSet activeActionSet{};
     activeActionSet.actionSet = gActionSet;
@@ -671,7 +706,7 @@ XrResult update_vr_controllers(XrTime predicted_time) {
     XrActionsSyncInfo syncInfo{XR_TYPE_ACTIONS_SYNC_INFO};
     syncInfo.countActiveActionSets = 1;
     syncInfo.activeActionSets = &activeActionSet;
-    XR_TRY(xrSyncActions(g_vrState.session, &syncInfo));
+    if (queryActions) XR_TRY(xrSyncActions(g_vrState.session, &syncInfo));
 
     // 2. Helper to read action states
     auto GetActionState = [&](XrAction action, XrPath subactionPath, auto& state) -> XrResult {
@@ -697,7 +732,7 @@ XrResult update_vr_controllers(XrTime predicted_time) {
         XrPath handPath = gHandPaths[hand];
 
         // Pose
-        XR_TRY(GetActionState(gPoseAction, handPath, state.pose));
+        if (queryActions) XR_TRY(GetActionState(gPoseAction, handPath, state.pose));
         {
             XrSpaceVelocity velocity = { XR_TYPE_SPACE_VELOCITY };
             XrSpaceLocation loc = { XR_TYPE_SPACE_LOCATION };
@@ -779,7 +814,8 @@ XrResult update_vr_controllers(XrTime predicted_time) {
         }
 #endif
 
-        // Actions bool
+        // Actions bool (not on an XR frame that reuses the last ones, above)
+        if (!queryActions) continue;
         XR_TRY(GetActionState(gSelectAction, handPath, state.select));
         XR_TRY(GetActionState(gMenuAction, handPath, state.menu));
         XR_TRY(GetActionState(gButtonAAction, handPath, state.button_a));

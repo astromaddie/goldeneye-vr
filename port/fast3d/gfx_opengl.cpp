@@ -49,6 +49,36 @@ static bool hud_L_was_drawn = false;
 static bool hud_R_was_drawn = false;
 static bool hud_H_was_drawn = false;
 static bool hud_P_was_drawn = false;   /* the weapon panel (issue #10) */
+/*
+ * Frame build, frame time (VR_ARCHITECTURE.md section 11): a capture counts as drawn only when a draw
+ * landed in it (an empty HUD quad still cost the compositor a whole eye-sized layer), and each one that
+ * was drawn bumps its generation, so vr_openxr.cpp copies a capture into its layer once per game frame
+ * that changed it, not once per XR frame. vr-diag.ini perf_legacy brings the old behaviour back.
+ */
+static unsigned s_gevrDrawCount;               /* every draw call, for the captures' "anything drawn?" */
+static unsigned s_hudDrawsAtBegin[4];          /* L, R, H, P */
+static unsigned s_hudGen[4];
+#ifdef GEVR_STEAM_FRAME
+#include "../vr/vr_diag.h"
+#include "../vr/vr_xr_prof.h"
+static inline bool gevr_perf_legacy(int bit) { return (gevrDiag()->perf_legacy & bit) != 0; }
+#else
+#define GEVR_PERF_LEGACY_EMPTY_HUD 8
+#define GEVR_PERF_LEGACY_READBACK 2
+static inline bool gevr_perf_legacy(int) { return true; }
+#endif
+static inline void gevr_hud_capture_opened(int k) { s_hudDrawsAtBegin[k] = s_gevrDrawCount; }
+/* the capture closed: true when it is to be shown (something was drawn, or the old behaviour) */
+static inline bool gevr_hud_capture_closed(int k)
+{
+    const bool drew = s_gevrDrawCount != s_hudDrawsAtBegin[k];
+    if (drew || gevr_perf_legacy(GEVR_PERF_LEGACY_EMPTY_HUD)) {
+        s_hudGen[k]++;
+        return true;
+    }
+    return false;
+}
+extern "C" unsigned gfx_vr_hud_generation(int k) { return (k >= 0 && k < 4) ? s_hudGen[k] : 0; }
 // ============================================================================
 // GLOBAL STATE - MSAA
 // ============================================================================
@@ -2379,6 +2409,7 @@ GLuint gfx_vr_scope_texture(int hand)
 static void gevr_gl_trace_draw(bool after);   // vr-diag.ini diag_gl
 
 static void gfx_opengl_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_vbo_num_tris) {
+    s_gevrDrawCount++;
 
     const bool lineMode = netActiveLineMode() && !gForceFlatShaderForMenu && !gVrFlatPass &&
         !vr_dl_is_pause_or_menu && buf_vbo[3] != 1.0f;
@@ -3676,6 +3707,7 @@ void gfx_vr_hud_capture_begin_L(void)
     if (gVrMenuLCaptureDepth++ > 0) {
         return;
     }
+    gevr_hud_capture_opened(0);
     gevr_capture_state_save(0);
     gfx_opengl_menu_capture_push();
 
@@ -3727,7 +3759,7 @@ void gfx_vr_hud_capture_end_L(void)
     }
 
     gfx_opengl_menu_capture_pop();
-    hud_L_was_drawn = true;
+    if (gevr_hud_capture_closed(0)) hud_L_was_drawn = true;
 
 
     if (gVrMenuFbPrevious >= 0) {
@@ -3777,6 +3809,7 @@ void gfx_vr_hud_capture_begin_R(void)
 {
     gfx_flush();
     gfx_opengl_vr_menu_R_fb_init();
+    gevr_hud_capture_opened(1);
     gevr_capture_state_save(1);
     gfx_opengl_menu_capture_push();
 
@@ -3816,8 +3849,74 @@ extern "C" bool gfx_vr_menu_R_bbox(float out[4])
 }
 
 extern "C" s32 gevrAimModeOn(void);   /* bondview2.c */
+
+/* the box of the non-transparent texels of a 128 x 128 RGBA image */
+static void gevr_R_box_from_pixels(const unsigned char *px, int S)
+{
+    int x0 = S, y0 = S, x1 = -1, y1 = -1;
+    for (int y = 0; y < S; y++) {
+        for (int x = 0; x < S; x++) {
+            if (px[(y * S + x) * 4 + 3] > 8) {
+                if (x < x0) x0 = x;
+                if (x > x1) x1 = x;
+                if (y < y0) y0 = y;
+                if (y > y1) y1 = y;
+            }
+        }
+    }
+    if (x1 >= x0 && y1 >= y0) {
+        s_gevrRBox[0] = (float)x0 / S;
+        s_gevrRBox[1] = (float)y0 / S;
+        s_gevrRBox[2] = (float)(x1 + 1) / S;
+        s_gevrRBox[3] = (float)(y1 + 1) / S;
+        s_gevrRBoxValid = true;
+        static unsigned logged;
+        if ((logged++ % 20) == 0) {
+            vr_log("ammo panel: drawn box %.3f,%.3f - %.3f,%.3f (GL origin)", s_gevrRBox[0], s_gevrRBox[1], s_gevrRBox[2], s_gevrRBox[3]);
+        }
+    }
+}
+
+/*
+ * The readback without a stall (Frame build, VR_ARCHITECTURE.md section 11): glReadPixels into a pixel
+ * buffer with a fence, mapped a frame or two later once the fence has passed. The plain glReadPixels
+ * waited for everything queued before it, the eye pass included, twice a second: at a 2160 eye that
+ * wait was long enough to miss a frame. vr-diag.ini perf_legacy bit 2 brings the stall back.
+ */
+static GLuint s_gevrRBoxPbo;
+static GLsync s_gevrRBoxFence;
+
+static bool gevr_R_box_async_ok(void)
+{
+    return !gevr_perf_legacy(GEVR_PERF_LEGACY_READBACK) && glFenceSync != nullptr && glClientWaitSync != nullptr
+           && glDeleteSync != nullptr && glMapBufferRange != nullptr && glUnmapBuffer != nullptr;
+}
+
+/* a readback in flight whose fence has passed: its box (never waits) */
+static void gevr_R_box_poll(void)
+{
+    if (!s_gevrRBoxFence) return;
+    const GLenum st = glClientWaitSync(s_gevrRBoxFence, 0, 0);
+    if (st != GL_ALREADY_SIGNALED && st != GL_CONDITION_SATISFIED) return;
+    glDeleteSync(s_gevrRBoxFence);
+    s_gevrRBoxFence = 0;
+    const int S = 128;
+    GLint prevPack = 0;
+    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &prevPack);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, s_gevrRBoxPbo);
+    const unsigned char *px = (const unsigned char *)glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, S * S * 4, GL_MAP_READ_BIT);
+    if (px) {
+        gevr_R_box_from_pixels(px, S);
+        glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+    }
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, (GLuint)prevPack);
+}
+
 static void gevr_measure_R_capture(void)
 {
+    const bool async = gevr_R_box_async_ok();
+    if (async) gevr_R_box_poll();
+
     static unsigned n;
     /* Aiming moves the counter (the ammo box shifts right in the capture): on
      * a change, measure at once and for a few frames after, or the crop cut the
@@ -3825,6 +3924,7 @@ static void gevr_measure_R_capture(void)
     static int lastAim = -1, burst;
     const int aim = gevrAimModeOn() ? 1 : 0;
     if (aim != lastAim) { lastAim = aim; burst = 4; }
+    if (async && s_gevrRBoxFence) return;   /* one in flight: the next capture asks again */
     if (burst > 0) burst--;
     else if ((n++ % 30) != 0) return;
 
@@ -3850,31 +3950,27 @@ static void gevr_measure_R_capture(void)
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_gevrRBoxFbo);
     glBlitFramebuffer(0, 0, w, h, 0, 0, S, S, GL_COLOR_BUFFER_BIT, GL_LINEAR);
 
-    static unsigned char px[128 * 128 * 4];
     glBindFramebuffer(GL_READ_FRAMEBUFFER, s_gevrRBoxFbo);
-    glReadPixels(0, 0, S, S, GL_RGBA, GL_UNSIGNED_BYTE, px);
-
-    int x0 = S, y0 = S, x1 = -1, y1 = -1;
-    for (int y = 0; y < S; y++) {
-        for (int x = 0; x < S; x++) {
-            if (px[(y * S + x) * 4 + 3] > 8) {
-                if (x < x0) x0 = x;
-                if (x > x1) x1 = x;
-                if (y < y0) y0 = y;
-                if (y > y1) y1 = y;
-            }
+    if (async) {
+        GLint prevPack = 0;
+        glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &prevPack);
+        if (!s_gevrRBoxPbo) {
+            glGenBuffers(1, &s_gevrRBoxPbo);
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, s_gevrRBoxPbo);
+            glBufferData(GL_PIXEL_PACK_BUFFER, S * S * 4, nullptr, GL_STREAM_READ);
+        } else {
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, s_gevrRBoxPbo);
         }
-    }
-    if (x1 >= x0 && y1 >= y0) {
-        s_gevrRBox[0] = (float)x0 / S;
-        s_gevrRBox[1] = (float)y0 / S;
-        s_gevrRBox[2] = (float)(x1 + 1) / S;
-        s_gevrRBox[3] = (float)(y1 + 1) / S;
-        s_gevrRBoxValid = true;
-        static unsigned logged;
-        if ((logged++ % 20) == 0) {
-            vr_log("ammo panel: drawn box %.3f,%.3f - %.3f,%.3f (GL origin)", s_gevrRBox[0], s_gevrRBox[1], s_gevrRBox[2], s_gevrRBox[3]);
-        }
+        glReadPixels(0, 0, S, S, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        s_gevrRBoxFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, (GLuint)prevPack);
+    } else {
+        static unsigned char px[128 * 128 * 4];
+        glReadPixels(0, 0, S, S, GL_RGBA, GL_UNSIGNED_BYTE, px);
+#ifdef GEVR_STEAM_FRAME
+        vrProfCount(VRPROF_READBACK);
+#endif
+        gevr_R_box_from_pixels(px, S);
     }
 
     glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)prevRead);
@@ -3884,8 +3980,8 @@ static void gevr_measure_R_capture(void)
 
 void gfx_vr_hud_capture_end_R(void)
 {
-    hud_R_was_drawn = true;
     gfx_flush();
+    if (gevr_hud_capture_closed(1)) hud_R_was_drawn = true;
     gevr_measure_R_capture();
     gfx_opengl_menu_capture_pop();
 
@@ -3936,6 +4032,7 @@ void gfx_vr_hud_capture_begin_H(void)
     if (gVrMenuHCaptureDepth++ > 0) {
         return;
     }
+    gevr_hud_capture_opened(2);
     gevr_capture_state_save(2);
     gfx_opengl_menu_capture_push();
 
@@ -3983,7 +4080,7 @@ void gfx_vr_hud_capture_end_H(void)
     }
 
     gfx_opengl_menu_capture_pop();
-    hud_H_was_drawn = true;
+    if (gevr_hud_capture_closed(2)) hud_H_was_drawn = true;
 
     if (gVrMenuHFbPrevious >= 0) {
         gfx_opengl_start_draw_to_framebuffer(gVrMenuHFbPrevious, 0.0f);
@@ -4044,6 +4141,7 @@ void gfx_vr_hud_capture_begin_P(void)
     if (gVrMenuPCaptureDepth++ > 0) {
         return;
     }
+    gevr_hud_capture_opened(3);
     gevr_capture_state_save(3);
     gfx_opengl_menu_capture_push();
 
@@ -4084,7 +4182,7 @@ void gfx_vr_hud_capture_end_P(void)
     }
 
     gfx_opengl_menu_capture_pop();
-    hud_P_was_drawn = true;
+    if (gevr_hud_capture_closed(3)) hud_P_was_drawn = true;
 
     if (gVrMenuPFbPrevious >= 0) {
         gfx_opengl_start_draw_to_framebuffer(gVrMenuPFbPrevious, 0.0f);
