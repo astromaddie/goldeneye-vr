@@ -40,6 +40,12 @@ typedef struct GevrDiag {
     float diag_aim;            /* force_render: the gun hand raised so the scope's eyepiece is this many cm ahead of an
                                   eye (diag_aim_eye), on its line of sight (dump_scope then dumps the eyes too), 0 = parked */
     int   diag_aim_eye;        /* diag_aim's eye: 0 left (the default), 1 right */
+    float diag_aim_yaw;        /* diag_aim: the gun turned about its eyepiece, degrees: yaw (positive left), */
+    float diag_aim_pitch;      /*   pitch (positive up) and roll (positive right side down), so the barrel is */
+    float diag_aim_roll;       /*   not the eye's line through the eyepiece, as held in a hand */
+    float diag_aim_dx;         /* diag_aim: the eyepiece this many cm right of the eye's line of sight (negative left) */
+    float diag_aim_swing;      /* diag_aim: degrees, the gun keeps turning about its eyepiece (yaw over 3 s, pitch
+                                  over 2.2 s), so the dumps catch it moving; 0 = still */
     float diag_roll;           /* force_render: the synthetic head's roll in degrees, positive = right ear down; the
                                   parked hands stay where they are (they hang from the unrolled head) */
     int   diag_point;          /* force_render: the right hand's aim pose points at the panel that is up (the virtual

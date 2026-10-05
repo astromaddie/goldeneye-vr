@@ -7,6 +7,7 @@
 #include "vr_motion.h"
 #include "vr_aim_math.h"
 #include "vr_upright_math.h"
+#include "vr_scope_math.h"
 #ifdef GEVR_STEAM_FRAME
 #include "vr_cinema.h"
 #include "vr_cinema_math.h"
@@ -4063,9 +4064,8 @@ static s32 gevrScopeBeginHand(s32 hand)
     GevrScopeState *st = &gevrScope[hand];
     s32 ctrl = hand == GUNRIGHT ? 1 : 0;
     f32 pos[3], right[3], up[3], back[3];
-    f32 r[3], u[3], f[3];
     f32 vu = GEVR_UNITS_PER_METRE * D_800364CC;
-    f32 len, zoom, fov, mag, g, n, fa, A, B, ro, uo, fo;
+    f32 zoom, fov, mag, n, fa;
     f32 zr[2];
     struct coord3d o, d;
     s32 on = FALSE;
@@ -4146,21 +4146,6 @@ static s32 gevrScopeBeginHand(s32 hand)
     }
     st->gunValid = TRUE;
 
-    /* the camera: on the shot's line, looking along it, the gun's up as its up */
-    f[0] = d.x; f[1] = d.y; f[2] = d.z;
-    r[0] = f[1] * up[2] - f[2] * up[1];
-    r[1] = f[2] * up[0] - f[0] * up[2];
-    r[2] = f[0] * up[1] - f[1] * up[0];
-    len = sqrtf(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
-    if (len < 1e-4f)
-    {
-        return FALSE;
-    }
-    r[0] /= len; r[1] /= len; r[2] /= len;
-    u[0] = r[1] * f[2] - r[2] * f[1];
-    u[1] = r[2] * f[0] - r[0] * f[2];
-    u[2] = r[0] * f[1] - r[1] * f[0];
-
     zoom = gevrScopeZoom(item);
     fov = zoom * s_gevrScopeK;   /* always zoomed, as a real scope */
     if (fov > 60.0f) fov = 60.0f;
@@ -4197,29 +4182,21 @@ static s32 gevrScopeBeginHand(s32 hand)
     st->origin[0] = o.x;
     st->origin[1] = o.y;
     st->origin[2] = o.z;
-    g = 1.0f / tanf(fov * 0.5f * (M_PI_F / 180.0f));
     n = GEVR_SCOPE_NEAR_M * vu;
     viGetZRange(zr);
     fa = zr[1] / 0.3f;          /* as far as the eyes see (gfx_opengl.cpp's z x 0.3) */
     if (fa < n * 10.0f) fa = n * 10.0f;
-    A = (fa + n) / (n - fa);
-    B = 2.0f * fa * n / (n - fa);
-    ro = r[0] * o.x + r[1] * o.y + r[2] * o.z;
-    uo = u[0] * o.x + u[1] * o.y + u[2] * o.z;
-    fo = f[0] * o.x + f[1] * o.y + f[2] * o.z;
-
-    /* rows: g x right, g x up, the depth row, and w = the distance along f */
-    for (i = 0; i < 3; i++)
+    /* the camera: on the shot's line, looking along it, the gun's up as its up (vr_scope_math.c,
+     * host-tested: the shot ray's far point lands on the picture's centre) */
     {
-        st->vp[i * 4 + 0] = g * r[i];
-        st->vp[i * 4 + 1] = g * u[i];
-        st->vp[i * 4 + 2] = -A * f[i];
-        st->vp[i * 4 + 3] = f[i];
+        f32 dir3[3] = { d.x, d.y, d.z };
+        f32 org3[3] = { o.x, o.y, o.z };
+
+        if (!gevrScopeCameraMatrix(org3, dir3, up, fov, n, fa, st->vp))
+        {
+            return FALSE;
+        }
     }
-    st->vp[12] = -g * ro;
-    st->vp[13] = -g * uo;
-    st->vp[14] = A * fo + B;
-    st->vp[15] = -fo;
 
     /* the camera space each draw's clip position came from (fr.c, no scale) */
     st->headP[0] = g_viProjectionMatrixF[0][0];

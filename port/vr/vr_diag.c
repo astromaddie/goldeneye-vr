@@ -48,6 +48,11 @@ static void apply(const char *key, const char *val)
     else if (!strcmp(key, "dump_hud")) s_diag.dump_hud = atoi(val);
     else if (!strcmp(key, "diag_aim")) s_diag.diag_aim = (float)atof(val);
     else if (!strcmp(key, "diag_aim_eye")) s_diag.diag_aim_eye = atoi(val) != 0 ? 1 : 0;
+    else if (!strcmp(key, "diag_aim_yaw")) s_diag.diag_aim_yaw = (float)atof(val);
+    else if (!strcmp(key, "diag_aim_pitch")) s_diag.diag_aim_pitch = (float)atof(val);
+    else if (!strcmp(key, "diag_aim_roll")) s_diag.diag_aim_roll = (float)atof(val);
+    else if (!strcmp(key, "diag_aim_dx")) s_diag.diag_aim_dx = (float)atof(val);
+    else if (!strcmp(key, "diag_aim_swing")) s_diag.diag_aim_swing = (float)atof(val);
     else if (!strcmp(key, "diag_roll")) s_diag.diag_roll = (float)atof(val);
     else if (!strcmp(key, "diag_point")) s_diag.diag_point = parse_bool(val);
     else if (!strcmp(key, "dump_cheat_frame")) s_diag.dump_cheat_frame = atoi(val);

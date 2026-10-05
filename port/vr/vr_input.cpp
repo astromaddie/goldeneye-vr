@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <cstdarg>
 #include <cmath>
+#include <chrono>
 
 #include "vr_input.h"
 #include "vr_log.h"
@@ -2365,6 +2366,8 @@ extern "C" void gevrVrDiagParkHands(const float headPos[3], const float headQuat
     const XrQuaternionf bq = { bqf[0], bqf[1], bqf[2], bqf[3] };
     float restPos[2][3];
     memcpy(restPos, kRestPos, sizeof(restPos));
+    XrQuaternionf aimTurn = { 0.0f, 0.0f, 0.0f, 1.0f };   // diag_aim's turn of the gun hand, body frame
+    bool haveAimTurn = false;
     {
         // vr-diag.ini diag_aim: the gun hand (controller 1) raised so the scope's eyepiece sits
         // diag_aim cm ahead of an eye (diag_aim_eye: 0 left, 1 right; 64 mm IPD: x -/+0.032), on its
@@ -2377,15 +2380,51 @@ extern "C" void gevrVrDiagParkHands(const float headPos[3], const float headQuat
             const bool known = lens[3] > 0.0f;
             const bool right = gevrDiag()->diag_aim_eye != 0;
             const float side = known ? lens[0] : 0.016f, up = known ? lens[1] : 0.127f, back = known ? lens[2] : 0.105f;
-            restPos[1][0] = (right ? 0.032f : -0.032f) - side;
-            restPos[1][1] = -up;
-            restPos[1][2] = -d - back;
+            // diag_aim_yaw/pitch/roll/dx/swing: the gun turned about its eyepiece (and the eyepiece
+            // moved off the eye's line), so the barrel is not the eye's line through the eyepiece, as a
+            // hand holds it; swing keeps it turning so a dump catches it moving
+            const GevrDiag *dg = gevrDiag();
+            float yaw = dg->diag_aim_yaw, pitch = dg->diag_aim_pitch, roll = dg->diag_aim_roll;
+            if (dg->diag_aim_swing != 0.0f) {
+                static const auto t0 = std::chrono::steady_clock::now();
+                const float t = std::chrono::duration<float>(std::chrono::steady_clock::now() - t0).count();
+                yaw += dg->diag_aim_swing * sinf(t * 6.2831853f / 3.0f);
+                pitch += dg->diag_aim_swing * 0.6f * sinf(t * 6.2831853f / 2.2f);
+            }
+            const float k = 3.14159265f / 360.0f;   // half-angles, radians
+            const XrQuaternionf qy = { 0.0f, sinf(yaw * k), 0.0f, cosf(yaw * k) };
+            const XrQuaternionf qp = { sinf(pitch * k), 0.0f, 0.0f, cosf(pitch * k) };
+            const XrQuaternionf qr = { 0.0f, 0.0f, sinf(-roll * k), cosf(-roll * k) };
+            auto mul = [](const XrQuaternionf &a, const XrQuaternionf &b) -> XrQuaternionf {
+                return { a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y, a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+                         a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w, a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z };
+            };
+            aimTurn = mul(mul(qy, qp), qr);
+            haveAimTurn = yaw != 0.0f || pitch != 0.0f || roll != 0.0f;
+            const float eyepiece[3] = { (right ? 0.032f : -0.032f) + dg->diag_aim_dx / 100.0f, 0.0f, -d };
+            // the lens's offset from the grip (gun right, up, back) turned with the gun
+            float off[3] = { side, up, back };
+            {
+                const XrQuaternionf &q = aimTurn;
+                const float tx = 2.0f * (q.y * off[2] - q.z * off[1]);
+                const float ty = 2.0f * (q.z * off[0] - q.x * off[2]);
+                const float tz = 2.0f * (q.x * off[1] - q.y * off[0]);
+                const float o0 = off[0] + q.w * tx + (q.y * tz - q.z * ty);
+                const float o1 = off[1] + q.w * ty + (q.z * tx - q.x * tz);
+                const float o2 = off[2] + q.w * tz + (q.x * ty - q.y * tx);
+                off[0] = o0; off[1] = o1; off[2] = o2;
+            }
+            restPos[1][0] = eyepiece[0] - off[0];
+            restPos[1][1] = eyepiece[1] - off[1];
+            restPos[1][2] = eyepiece[2] - off[2];
             static int logged;
             if (!logged || (known && logged == 1)) {
                 logged = known ? 2 : 1;
-                vr_log("[vr-diag] diag_aim: gun hand at (%.3f %.3f %.3f) m, the eyepiece %.0f cm ahead of the %s eye%s",
+                vr_log("[vr-diag] diag_aim: gun hand at (%.3f %.3f %.3f) m, the eyepiece %.0f cm ahead of the %s eye%s; "
+                       "gun turned yaw %.0f pitch %.0f roll %.0f deg, eyepiece %.1f cm right, swing %.0f deg",
                        restPos[1][0], restPos[1][1], restPos[1][2], d * 100.0f, right ? "right" : "left",
-                       known ? "" : " (default lens offset)");
+                       known ? "" : " (default lens offset)", dg->diag_aim_yaw, dg->diag_aim_pitch, dg->diag_aim_roll,
+                       dg->diag_aim_dx, dg->diag_aim_swing);
             }
         }
     }
@@ -2408,7 +2447,7 @@ extern "C" void gevrVrDiagParkHands(const float headPos[3], const float headQuat
         // play = head (without roll) * rest; view = head^-1 * (play - head)
         float pp[3];
         qrot(bq, restPos[h], pp);
-        const XrQuaternionf po = qmul(bq, rest);
+        const XrQuaternionf po = (h == 1 && haveAimTurn) ? qmul(bq, qmul(aimTurn, rest)) : qmul(bq, rest);
         gCtrlPosePlay[h].position = { headPos[0] + pp[0], headPos[1] + pp[1], headPos[2] + pp[2] };
         gCtrlPosePlay[h].orientation = po;
         float vpos[3];

@@ -1,29 +1,27 @@
 /*
- * The scope's lens as optics (issue #40; GoldenEye wear 2026-10-04: "the scope image shifts to the
- * right the closer the rifle comes to the eyes").
+ * The scope's lens (issue #40), the Steam Frame build's maths. Pure C, no state: the host test
+ * (tools/steam_frame/tests/test_vr_scope.c) runs these same functions, and the lens shader in
+ * vr_openxr.cpp is gevrScopeDiscTexcoord in GLSL.
  *
- * A riflescope's image is collimated: what it shows sits at infinity along its optical axis, so
- * the target and the sight in it are where the gun points, from any eye and at any eye relief.
- * The eyepiece is only the window it is seen through. So the lens is no longer a picture on a quad
- * at the eyepiece (whose place, seen from an eye, moves with the distance, and which the old near-
- * plane fix pushed out along the head's ray, off the aiming eye's line of sight). It is a
- * projection layer: per eye, the scope's image laid out in the tangent plane of the scope's axis
- * (x along the gun's right, y its up), and cut to the eyepiece's circle as that eye sees it.
+ * History. Fourth wear (2026-10-04): a lens quad near the eyes, turned toward and pushed out along
+ * the head's centre ray to dodge the compositor's near plane, slid off the aiming eye's line of
+ * sight. 4811c1e then made the scope "optics": a collimated image on the gun's axis, each eye
+ * looking through the eyepiece into it. Worn on 2026-10-05 that slid the picture out of the
+ * eyepiece and away from the aim: through the eyepiece an eye saw the part of the image along its
+ * own line through it, which only holds the aim point when that line is the gun's axis. Held in a
+ * hand, the eye-to-eyepiece line is never quite the barrel's (journal: the right eye's window 0.2,
+ * 11 degrees, off the image's centre), so the red sight sat at or past the window's edge.
  *
- * In that tangent space an eye at `eye` sees the eyepiece (centre c, radius R, its face square to
- * the axis) as the circle centred on ((c - eye).right, (c - eye).up) / depth with radius R / depth,
- * depth = (c - eye).axis: exact, the projection of a circle onto a parallel plane. Both eyes look
- * into the same image (same tangent, same picture: no mismatched copy); each sees the part its own
- * line of sight through the eyepiece picks out. The image covers a field of half-width `field`
- * (tangent) round the axis; an eye whose window falls outside it sees the dark glass there, as off
- * a real scope's exit pupil. The field covers both eyes' windows while that stays under a cap
- * (resolution: the image is a fixed 512 texels), and always the nearest eye's whole window.
- * The magnification is unchanged: tangent t in the eye shows the world at t / M (the N64's zoom),
- * so bondview2.c renders the image over field / M.
+ * Now (round 3) the simplest reliable design: the zoomed picture is rendered along the shot ray and
+ * drawn on the eyepiece's face, a disc square to the gun's axis, filling it, its centre (the aim
+ * point and the red sight) at the disc's centre and its up the gun's up. Both eyes see that one disc
+ * where the rifle model has its eyepiece; per eye it is a projection-layer view with that eye's own
+ * pose (no near plane, nothing turned toward the head). Each texel of an eye's view is a ray from
+ * the eye; where it meets the eyepiece's plane inside the circle it shows the picture at that point
+ * of the disc. The magnification is the N64's over the disc's angular size from the aiming eye.
  *
- * Vectors in one space (view space, metres). Pure C, no state: the host test
- * (tools/steam_frame/tests/test_vr_scope.c) runs these same functions; the lens copy shader in
- * vr_openxr.cpp is gevrScopeEyeTexcoord in GLSL.
+ * Frames: "eye space" is the eye's own (x right, y up, -z ahead, metres); the caller turns the lens
+ * and the gun's axes into it.
  */
 #ifndef VR_SCOPE_MATH_H
 #define VR_SCOPE_MATH_H
@@ -32,36 +30,60 @@
 extern "C" {
 #endif
 
-#define GEVR_SCOPE_EYE_MIN_DEPTH_M 0.015f   /* nearer than this along the axis (or behind it): not seen */
-#define GEVR_SCOPE_FIELD_CAP 0.40f          /* shared field, tangent: ~0.7 texels a display pixel at 512 */
-#define GEVR_SCOPE_FIELD_MAX 1.0f           /* never wider than 45 degrees off the axis */
+#define GEVR_SCOPE_DISC_MIN_Z_M 0.005f   /* every point of the disc at least this far ahead of the eye */
+#define GEVR_SCOPE_DISC_PAD     0.04f    /* the view's box past the disc's outline, a fraction of its size */
+#define GEVR_SCOPE_DISC_STEPS   48       /* the outline sampled at this many points for the box */
 
-typedef struct GevrScopeEyeView {
-    int visible;        /* the eye is behind the eyepiece and sees its face */
-    float center[2];    /* the eyepiece's circle in the axis's tangent plane (x right, y up) */
-    float radius;       /* its radius, tangent */
-    float depth;        /* the eyepiece's distance along the axis from the eye, m */
-} GevrScopeEyeView;
+typedef struct GevrScopeDisc {
+    int visible;        /* the eye is behind the eyepiece (sees its face) and the disc is ahead of it */
+    float lens[3];      /* the eyepiece's centre, eye space */
+    float right[3];     /* the gun's right, up and axis (where it points: the gun's -back), eye space */
+    float up[3];
+    float axis[3];
+    float radius;       /* the eyepiece's radius, m */
+    float box[4];       /* the view's tangents round the disc: left, right, up, down (atanf = XrFovf) */
+} GevrScopeDisc;
 
-/* One eye's view of the eyepiece. lens = its centre, radius R (m); right, up, axis = the scope's
- * basis (unit; axis is where it points, the gun's -back). */
-void gevrScopeEyeAperture(const float lens[3], float radius, const float right[3], const float up[3],
-                          const float axis[3], const float eye[3], GevrScopeEyeView *out);
-
-/* The shared field's half-width (tangent) for these two eyes and the eye nearest the axis
- * (smallest |center|), -1 when neither sees the eyepiece (then 0 is returned). */
-float gevrScopeField(const GevrScopeEyeView eyes[2], int *nearest);
-
-/* The tangent rectangle a layer view covers for this eye: the eyepiece's circle's box,
- * {left, right, up, down} (atanf of them is the XrFovf). */
-void gevrScopeEyeFovTan(const GevrScopeEyeView *v, float fovTan[4]);
+/* One eye's view of the eyepiece's disc. All vectors in that eye's space (unit axes). */
+void gevrScopeDisc(const float lens[3], float radius, const float right[3], const float up[3],
+                   const float axis[3], GevrScopeDisc *out);
 
 /*
- * The copy, per texel of an eye's layer image: q in [-1, 1]^2 across that eye's box. Returns
- * 0 outside the eyepiece (transparent), 1 inside it within the field (tex = the scope image's
- * texture coordinate, 0..1), 2 inside it past the field (the dark glass).
+ * A view basis for an eye looking at the eyepiece: z = from the eyepiece's centre back to the eye
+ * (the view looks along -z, straight at it), x level with the eye's own x-z plane (the eye's up kept
+ * as far as it can be), y = z x x. Each eye's scope view uses its own position with this turn, so
+ * its box is centred on the disc (the compositor is never handed a view far off its own axis).
+ * In and out in eye space; the caller turns the lens and the gun's axes into this basis (dot with
+ * x, y, z) before gevrScopeDisc.
  */
-int gevrScopeEyeTexcoord(const GevrScopeEyeView *v, float field, const float q[2], float tex[2]);
+void gevrScopeViewBasis(const float lens[3], float x[3], float y[3], float z[3]);
+
+/*
+ * The eye looking through the scope: of the eyes that see the disc, the one nearest the eyepiece
+ * (the eye it is held up to); -1 when neither sees it. cosOut (may be NULL): the cosine of the
+ * angle between that eye's line to the eyepiece's centre and the barrel.
+ */
+int gevrScopeAimEye(const GevrScopeDisc eyes[2], float *cosOut);
+
+/* The disc's angular radius (tangent) from an eye: what the N64's magnification is applied over. */
+float gevrScopeDiscTan(const GevrScopeDisc *d);
+
+/*
+ * One texel of an eye's view: tan = the ray's tangents (x right, y up) in eye space. Returns 0 off
+ * the disc (transparent), 1 on it, with tex = the scope picture's texture coordinate (0..1, x the
+ * gun's right, y its up, 0.5 0.5 the aim point) and rim = the distance from the disc's centre over
+ * its radius (0..1).
+ */
+int gevrScopeDiscTexcoord(const GevrScopeDisc *d, const float tan[2], float tex[2], float *rim);
+
+/*
+ * The scope camera (bondview2.c gevrScopeBeginHand): on the shot's line at origin, looking along
+ * dir, with the gun's up as its up (made square to dir), fovDeg across, near/far in the same units.
+ * vp: camera space to the scope's clip space, a column-major GL matrix (rows g right, g up, the
+ * depth row, -forward). Returns 0 when dir and up are parallel.
+ */
+int gevrScopeCameraMatrix(const float origin[3], const float dir[3], const float up[3], float fovDeg,
+                          float nearZ, float farZ, float vp[16]);
 
 #ifdef __cplusplus
 }
