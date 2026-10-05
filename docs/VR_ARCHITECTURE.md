@@ -589,8 +589,8 @@ at the guard tower).
 | APK build on a Mac, Khronos loader, persistent devkit title launched from Steam | played in headset (every wear) |
 | Session, multiview swapchain, ROM from `~/Documents/GoldenEye`, 90 Hz loop | played in headset; `[vr-perf]` at 90 Hz verified unattended (Dam, 90 fps, 0 missed; section 11) |
 | 120 Hz at a 2160 eye | verified unattended 2026-10-05 (Steam launches, GoldenEyeVR's per-app rate 120 and resolution 2160: Dam and Facility at 120.0 fps, 0 missed in 60 s; section 11). Not worn |
-| HUD atlas, shown-only-when-drawn captures, async ammo-box readback | verified unattended 2026-10-05 (timings, section 11); the atlas's images not dumped and not worn: whether the HUD, ammo and weapon panels look the same is the next wear's question |
-| DisplayHz and RenderScale Auto, the refresh recommendation line | Auto verified unattended (the log's request and rate lines); the Graphics and Display rate pickers with their new Auto buttons not looked at on the device; the recommendation line never triggered (it needs a worn run that misses) |
+| HUD atlas, shown-only-when-drawn captures, async ammo-box readback | verified unattended 2026-10-05 (timings, section 11; on the merged build 1c4c35b, Dam at 120 Hz, the composite `vr-comp1.bmp` shows the ammo counter "7 | 93" from the atlas at the gun hand, legible; layers eyes, hud-atlas). Not worn |
+| DisplayHz and RenderScale Auto, the refresh recommendation line | Auto verified unattended (the log's request and rate lines; the merged build's VR settings dump shows the DISPLAY RATE row Auto / 72 / 90 / 120 fitting its line); the Graphics page not dumped; the recommendation line never triggered (it needs a worn run that misses) |
 | Frame controller profile suggested and active | played in headset (first wear: the Frame profile active in the journal) |
 | Menu hold 1.5 s opens VR settings | not reported on: the first wear used the Menu hold on 641dd62, where it still offered the launcher restart; the VR settings themselves were opened with Menu + View on the second wear |
 | View held 1 s: recentre | played in headset (first wear) |
@@ -803,6 +803,16 @@ Textures are untouched: native ones are bilinear-filtered without mipmaps (`Vide
 1, the port's default; the N64's three-point filter is option 2), HD packs mipmapped with 2x
 anisotropy.
 
+
+### The merged build (1c4c35b: this work with round 3), checked unattended 2026-10-05
+
+Steam launches at the per-app 120 Hz, Auto 2160, `diag_gl` on: Dam walking 0 missed in the last 30 s
+(the first windows, with the dump's readbacks and `diag_gl`'s per-draw checks, missed 4, 1, 1), the
+ammo counter legible from the atlas; the pointer's beam and dot over the docked VR settings (`diag_point`,
+`vrsettings`; layers screen, eyes, pointer, pointer); the scope with `diag_aim` 15 cm, the gun turned
+12 / -6 / 25: the red sight at the centre of the disc on the eyepiece; Dam's intro on the 3D cinema with
+its band, no GL errors in any run. Missed frames show only at loads (the intro's start and the cut to
+play: 2 and 4 in those windows).
 
 ## 12. Wear feedback 2026-10-05 (round 3, build 3c7aa52)
 
