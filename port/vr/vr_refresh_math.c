@@ -16,18 +16,26 @@ int gevrRefreshStepDown(int hz)
     return 0;
 }
 
-int gevrRefreshInit(GevrRefresh *r, int setting)
+int gevrRefreshRequestFor(int setting, const float *offered, int nOffered)
 {
-    r->setting = gevrRefreshClampSetting(setting);
-    r->ceiling = r->setting == GEVR_REFRESH_AUTO ? GEVR_REFRESH_AUTO_HZ : r->setting;
+    if (setting <= 0) return 0;
+    for (int i = 0; i < nOffered; i++) {
+        const float d = offered[i] - (float)setting;
+        if (d > -0.5f && d < 0.5f) return setting;
+    }
+    return 0;
+}
+
+void gevrRefreshInit(GevrRefresh *r)
+{
     r->low = 0;
-    r->lastFps = 0.0;
-    return r->ceiling;
+    r->recommended = 0;
+    r->fps[0] = r->fps[1] = 0.0;
 }
 
 int gevrRefreshWindow(GevrRefresh *r, double fps, double displayHz, int worn, double maxGapMs)
 {
-    if (r->setting != GEVR_REFRESH_AUTO) return 0;   /* a fixed rate is the wearer's choice */
+    if (r->recommended) return 0;                     /* once a session */
     if (!worn || displayHz <= 1.0) {
         r->low = 0;                                   /* off the head: start counting again */
         return 0;
@@ -37,14 +45,10 @@ int gevrRefreshWindow(GevrRefresh *r, double fps, double displayHz, int worn, do
         r->low = 0;
         return 0;
     }
-    r->lastFps = fps;
+    r->fps[0] = r->fps[1];
+    r->fps[1] = fps;
     if (++r->low < GEVR_REFRESH_LOW_WINDOWS) return 0;
-    r->low = 0;
-    /* one step below what the display runs at, or below the ceiling if the runtime runs faster */
-    const int running = (int)(displayHz + 0.5);
-    const int from = running < r->ceiling ? running : r->ceiling;
-    const int next = gevrRefreshStepDown(from);
-    if (next == 0) return 0;                          /* already at 72: nothing lower */
-    r->ceiling = next;
-    return next;
+    const int next = gevrRefreshStepDown((int)(displayHz + 0.5));
+    r->recommended = next > 0 ? next : -1;            /* -1: already at 72, logged once as such */
+    return r->recommended;
 }

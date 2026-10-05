@@ -77,7 +77,7 @@ int VrSmoothStairs = 0;
 #endif
 float VrSwayStrength = 0.0f;   /* experimental walking sway and stair bob, 0 = off .. 1 */
 #ifdef GEVR_STEAM_FRAME
-int VrRefreshRate = 0;     /* Auto (standard.md section 9): 120 Hz, falling back to 90 and 72 while worn (vr_refresh_math.h); or 72, 90, 120 */
+int VrRefreshRate = 0;     /* Auto (standard.md section 9): SteamVR's per-app rate (vr_refresh_math.h); or 72, 90, 120 when offered */
 #else
 int VrRefreshRate = 90;    /* Hz (launcher: 72, 90, 120), 0 = the runtime's default (vr_openxr.cpp vr_request_refresh_rate) */
 #endif

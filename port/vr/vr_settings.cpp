@@ -39,7 +39,7 @@ static void vrSettingsMigrateDisplay(bool refresh)
     if (s_displayVersion >= GEVR_DISPLAY_SETTINGS_VERSION) return;
     if (refresh && VrRefreshRate == 90) {
         VrRefreshRate = GEVR_REFRESH_AUTO;
-        vr_log("[vr] settings: DisplayHz 90 (the old default) -> Auto (120 Hz with the fallback)");
+        vr_log("[vr] settings: DisplayHz 90 (the old default) -> Auto (SteamVR's per-app rate)");
     }
     if (fabsf(VrRenderScale - 1.0f) < 0.01f) {
         VrRenderScale = GEVR_FRAME_RENDER_SCALE;
@@ -127,10 +127,9 @@ extern "C" void vrSettingsSave(void)
     fprintf(f, "; Metres above (+) or below (-) eye level; set by grabbing the screen with both grips.\n");
     fprintf(f, "ScreenHeight=%.2f\n", VrScreenHeight);
 #ifdef GEVR_STEAM_FRAME
-    fprintf(f, "; Display refresh rate in Hz (VR settings): 0 = Auto (the default: 120, stepping down\n");
-    fprintf(f, "; to 90 and then 72 if the game can't keep up while you wear the headset), or a fixed\n");
-    fprintf(f, "; 72, 90 or 120. The game runs at 60 Hz: 120 shows each frame exactly twice.\n");
-    fprintf(f, "; 120 also needs GoldenEyeVR's refresh rate set to 120 in SteamVR's per-app settings.\n");
+    fprintf(f, "; Display refresh rate in Hz (VR settings): 0 = Auto (the default): the rate set for\n");
+    fprintf(f, "; GoldenEyeVR in SteamVR's per-app settings, which decides it (120 recommended: the game\n");
+    fprintf(f, "; runs at 60 Hz, so each frame shows exactly twice). 72, 90 or 120: asked for when offered.\n");
 #else
     fprintf(f, "; Display refresh rate in Hz (launcher): 72, 90 (the default) or 120. The game\n");
     fprintf(f, "; runs at 60 Hz: 120 shows each frame exactly twice (smoothest hands) but works\n");

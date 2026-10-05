@@ -49,11 +49,11 @@ extern float VrComfortVignette;
 extern int VrEvenMovement;
 extern int VrSmoothStairs;
 extern float VrSwayStrength;
-// Display refresh rate in Hz (vr_openxr.cpp). Frame build: 0 = Auto, the default (120 Hz falling
-// back to 90 and 72 while worn, vr_refresh_math.h), or a fixed 72, 90 or 120. Quest build: 0 = the
-// runtime's default, 90 the default.
+// Display refresh rate in Hz (vr_openxr.cpp). Frame build: 0 = Auto, the default (SteamVR's per-app
+// rate, which the app can't change; vr_refresh_math.h), or 72, 90 or 120 asked for when offered.
+// Quest build: 0 = the runtime's default, 90 the default.
 extern int VrRefreshRate;
-// The display keys' defaults changed on 2026-10-05 (standard.md section 9: Auto 120 Hz, a 2160 eye).
+// The display keys' defaults changed on 2026-10-05 (standard.md section 9: Auto rate, a 2160 eye).
 // A goldeneye-vr.ini without DisplayVersion=2 that holds the old defaults (DisplayHz=90,
 // RenderScale=1.00) takes the new ones once; what the player picked otherwise stays.
 #define GEVR_DISPLAY_SETTINGS_VERSION 2

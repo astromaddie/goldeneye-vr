@@ -2536,12 +2536,12 @@ static void gevrSettingsColumns(bool inGame, int *mode, GevrComfortChoice &comfo
 #endif
         {
 #ifdef GEVR_STEAM_FRAME
-            // Auto by default (standard.md section 9): 120 Hz, stepping down to 90 and 72 if the
-            // game can't keep up while worn (vr_refresh_math.h); or a fixed rate.
+            // Auto by default (standard.md section 9): the rate set for GoldenEyeVR in SteamVR's
+            // per-app settings (the app can't change it); a fixed rate is asked for only if offered.
             int hz = VrRefreshRate <= 0 ? 0 : VrRefreshRate >= 105 ? 120 : VrRefreshRate < 81 ? 72 : 90;
             bool picked = ImGui::RadioButton("Auto", &hz, 0);
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("120 Hz, stepping down to 90 or 72 if the game can't keep up");
+                ImGui::SetTooltip("SteamVR's per-app rate for GoldenEyeVR (set it to 120 Hz there)");
             }
             ImGui::SameLine();
             picked |= ImGui::RadioButton("72 Hz", &hz, 72);

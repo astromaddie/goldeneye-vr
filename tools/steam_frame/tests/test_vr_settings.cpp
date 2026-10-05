@@ -175,7 +175,7 @@ int main()
     CHECK(near(VrRenderScale, GEVR_FRAME_RENDER_SCALE) && VrMsaa == GEVR_FRAME_MSAA, "RenderScale, EyeMsaa: the Frame's defaults");
     CHECK(VrCutsceneMode == VR_CUTSCENES_CINEMA_3D, "CutsceneMode: the Frame's default is the 3D cinema");
     CHECK(VrCinemaDepth == 100, "CinemaDepth: 100% (64 mm) by default");
-    CHECK(VrRefreshRate == 0, "DisplayHz: the Frame's default is Auto (0: 120 Hz with the fallback)");
+    CHECK(VrRefreshRate == 0, "DisplayHz: the Frame's default is Auto (0: SteamVR's per-app rate)");
     CHECK(VrRenderScale == 0.0f, "RenderScale: the Frame's default is Auto (0)");
     CHECK(near(vrSettingsEyeScale(0.0f, 1728) * 1728.0f, 2160.0f, 0.5f), "Auto on the runtime's 1728: 1.25, a 2160 eye");
     CHECK(near(vrSettingsEyeScale(0.0f, 2160), 1.0f), "Auto with SteamVR's per-app 2160: 1.0");

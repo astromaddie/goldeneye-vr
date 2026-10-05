@@ -50,7 +50,7 @@ done
     "$here/test_vr_scope.c" "$root/port/vr/vr_scope_math.c" -lm -o "$out/test_vr_scope"
 "$out/test_vr_scope"
 
-# the display rate's fallback (port/vr/vr_refresh_math.c): Auto 120 -> 90 -> 72 after two low worn windows
+# the display rate (port/vr/vr_refresh_math.c): one request only if offered, the per-app rate recommended after two low worn windows
 "$cc" -std=c11 -Wall -Wextra -Werror -I"$root/port/vr" \
     "$here/test_vr_refresh.c" "$root/port/vr/vr_refresh_math.c" -o "$out/test_vr_refresh"
 "$out/test_vr_refresh"
