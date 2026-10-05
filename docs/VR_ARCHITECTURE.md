@@ -15,9 +15,9 @@ started".
 | Container | Lepton, Android 11 (API 30), arm64-v8a, 4 KB pages, no clipboard service |
 | GL | GLES 3.2 through Mesa Zink on Turnip (Adreno 750); `GL_OVR_multiview2`, `GL_EXT_sRGB_write_control` |
 | Runtime | SteamVR/OpenXR 2.17.10 via `/vendor/etc/openxr/1/active_runtime.json`; the app bundles the Khronos 1.1.63 loader (no broker) |
-| Eyes | recommended 1728x1728; FOV L(-1.028, 0.885, 0.864, -1.048) R(-0.877, 1.033, 0.866, -1.042) rad |
+| Eyes | recommended 1728x1728 by default, 2160x2160 with GoldenEyeVR's per-app resolution override (set 2026-10-05); FOV L(-1.028, 0.885, 0.864, -1.048) R(-0.877, 1.033, 0.866, -1.042) rad |
 | Swapchain | sRGB (`GL_SRGB8_ALPHA8`, written raw with `GL_EXT_sRGB_write_control`), 3 images, `arraySize=2` multiview |
-| Refresh | 90 Hz requested by default (`DisplayHz`) and held; 72 offered; 120 needs SteamVR's per-app setting and has never run |
+| Refresh | the title's SteamVR per-app rate, which the app can't change (standard section 9): GoldenEyeVR is set to 120 Hz (and resolution 2160) in SteamVR's per-app settings since 2026-10-05, and runs at 120.0 Hz (8.333 ms) from a Steam launch; `DisplayHz` Auto asks for nothing (section 11) |
 | Controllers | `valve/frame_controller_valve` with `XR_VALVE_frame_controller_interaction` (suggest result in the log) |
 | Game | N64 decomp (GoldenEye 007 USA), Fast3D GL renderer, 60 Hz tick, Perfect Dark PC port host layer |
 
@@ -508,6 +508,8 @@ Settings...** at the bottom of the watch's Game Options page (`options.c`; A on 
 | `dump_cheat_frame` | the dump files N XR frames after a `gevr_cheat.txt` word is applied (`vrsettings`, which wants the panel too, or `boom`: an explosion 4 m ahead, for the sprites; with `invincible` first) |
 | composite (every dump) | `vr-comp0.bmp`, `vr-comp1.bmp`: every submitted layer read back and composited per eye as the compositor does it (projection layers turned by their poses, quads ray-cast, premultiplied alpha), at half the eye size; the log lists the layers back to front. Cylinders are left out |
 | `render_scale`, `msaa` | this run's eye scale (0.5-2.0) and eye MSAA samples (1, 2, 4) instead of `goldeneye-vr.ini`'s `RenderScale` and `EyeMsaa`, for timing runs that leave the player's file alone |
+| `refresh_rate` | ask for this rate once (if the runtime offers it) instead of `DisplayHz` |
+| `perf_legacy` | A/B runs of the frame-time work (section 11), a bit mask of old behaviours brought back: 1 an eye-sized quad swapchain per HUD capture copied every XR frame, 2 the stalling `glReadPixels` for the ammo panel's box, 4 every action queried every XR frame, 8 empty HUD captures submitted; 15 = all |
 | `dump_cinema_frame` | the `dump_frame` files N XR frames after the 3D cinema is placed (a cutscene starts; `boot_stage=33` plays Dam's intro), with `vr-cinema0.bmp` and `vr-cinema1.bmp`: the two eye images as the compositor gets them (picture over the band) |
 | `cinema_sep_mm` | the 3D cinema's camera separation in mm; 0 or absent = 64 |
 
@@ -516,6 +518,14 @@ step per display frame, the head's own motion not included; with even movement t
 0, without it about half the mean), `speed_cms` (the stick's speed from the last tick), `f=` (the
 range of the between-ticks fraction; `1.00..1.00` when even movement is off), `clock=display|wall`,
 `stairs=` mode with the frames in each, `h_minus_floor`, `sway`, and `gait=anim:ratio/loops`.
+
+`[vr-xr]` after each `[vr-perf]` line (Frame build, `vr_xr_prof.cpp`; the OpenXR calls are wrapped at link time):
+per XR frame the swapchain cycles and the ms in acquire, wait and release, the layers submitted,
+`xrEndFrame`, `xrSyncActions` and the action and space queries, the game thread's own CPU time
+(`CLOCK_THREAD_CPUTIME_ID`, lesson 50: the busy part of the frame) and the process's, the HUD copies
+and skips, stalling readbacks, input reuses and `gpu_aux=` (the HUD atlas copy's GPU time, with
+`timing`). `[vr] display running at N Hz` gives the panel's rate (the shortest `predictedDisplayPeriod`
+seen), `[vr] display: ...` what was asked for and what the runtime offered.
 
 `[vr-perf]` every 10 s (standard line, sfvr formatter) with `sim`, `render`, `redraw`, `end` CPU ms,
 the multiview pass as both `eye=` values, `gpu=` ms when `timing` is on, `missed` (a frame over 1.5 display
@@ -536,8 +546,8 @@ and the docs use. Keys not listed have no standard counterpart.
 | `vignette` / `vignette_strength` | `ComfortVignette` | 0 = off |
 | `dominant_hand` | `LeftHandedMode` | plus `SwapJoysticks` |
 | `haptics` | `Vibration` | the launcher's Haptics pages for the table |
-| `refresh_rate` | `DisplayHz` | default 90, asked for when offered |
-| `resolution_scale` | `RenderScale` | 0.75-1.5 times the recommended 1728, from the next start; the VR settings' Graphics page. The Frame build ignores the game config's `Video.VRRenderScale` (that file is only written at a clean exit, which a Steam-launched app never has) |
+| `refresh_rate` | `DisplayHz` | Frame: 0 = Auto (default): SteamVR's per-app rate, nothing asked for; 72, 90, 120 asked for once when offered (section 11). Quest: default 90 |
+| `resolution_scale` | `RenderScale` | Frame: 0 = Auto (default): the eye about 2160 from whatever the runtime recommends (1.25 on 1728, 1.0 on the per-app 2160); else 0.75-1.5 times the recommendation, from the next start; the VR settings' Graphics page. A file without `DisplayVersion=2` holding the old defaults (`DisplayHz=90`, `RenderScale=1.00`) takes the new ones once. The Frame build ignores the game config's `Video.VRRenderScale` (that file is only written at a clean exit, which a Steam-launched app never has) |
 | `msaa` (port-specific) | `EyeMsaa` | eye MSAA samples, 1 (off), 2 or 4, at once; the Graphics page. The eye pass only: the game config's `Video.MSAA` stays 1, as it would put the screen pass through an MSAA framebuffer too |
 | `hud_distance` | `HudDistance` | stereo HUD parallax |
 | `height` | `PlayerHeight`, `MatchCharacterHeight`, `SeatedMode` | |
@@ -549,7 +559,7 @@ and the docs use. Keys not listed have no standard counterpart.
 | `cutscenes` | `CutsceneMode` | `cinema_3d` = 1 (Frame default), `flat` = 0 (the virtual screen, as before; this port had no head-tracked cutscene view to call immersive); VR settings, DISPLAY > Cutscenes; read each game frame, so it applies from the next cutscene frame; the Quest build ignores it |
 | `camera_shake` | none | the game's head bob and sway are off in stereo; `SwayStrength` is an opt-in experiment |
 | `cinema_depth` (port-specific) | `CinemaDepth` | the 3D cinema's camera separation, percent of 64 mm, 50-200, default 100; VR settings, DISPLAY > Cinema depth, at once (Frame build) |
-| `force_render`, `diag_yaw`, `diag_roll`, `dump_frame`, `timing`, `diag_walk`, `diag_turn`, `dump_watch_frame`, `watch_backdrop`, `dump_scope`, `diag_gl`, `dump_hud`, `diag_aim`, `diag_aim_eye`, `diag_point`, `dump_cheat_frame`, `render_scale`, `msaa`, `dump_cinema_frame`, `cinema_sep_mm` | `vr-diag.ini` | not in the game's ini |
+| `force_render`, `diag_yaw`, `diag_roll`, `dump_frame`, `timing`, `diag_walk`, `diag_turn`, `dump_watch_frame`, `watch_backdrop`, `dump_scope`, `diag_gl`, `dump_hud`, `diag_aim`, `diag_aim_eye`, `diag_point`, `dump_cheat_frame`, `render_scale`, `msaa`, `refresh_rate`, `perf_legacy`, `dump_cinema_frame`, `cinema_sep_mm` | `vr-diag.ini` | not in the game's ini |
 
 ## 8. Status
 
@@ -565,7 +575,9 @@ reticle; the 3D cinema was not on it).
 | --- | --- |
 | APK build on a Mac, Khronos loader, persistent devkit title launched from Steam | played in headset (every wear) |
 | Session, multiview swapchain, ROM from `~/Documents/GoldenEye`, 90 Hz loop | played in headset; `[vr-perf]` at 90 Hz verified unattended (Dam, 90 fps, 0 missed; section 11) |
-| 120 Hz | not started (needs SteamVR's per-app refresh setting; never run) |
+| 120 Hz at a 2160 eye | verified unattended 2026-10-05 (Steam launches, GoldenEyeVR's per-app rate 120 and resolution 2160: Dam and Facility at 120.0 fps, 0 missed in 60 s; section 11). Not worn |
+| HUD atlas, shown-only-when-drawn captures, async ammo-box readback | verified unattended 2026-10-05 (timings, section 11); the atlas's images not dumped and not worn: whether the HUD, ammo and weapon panels look the same is the next wear's question |
+| DisplayHz and RenderScale Auto, the refresh recommendation line | Auto verified unattended (the log's request and rate lines); the Graphics and Display rate pickers with their new Auto buttons not looked at on the device; the recommendation line never triggered (it needs a worn run that misses) |
 | Frame controller profile suggested and active | played in headset (first wear: the Frame profile active in the journal) |
 | Menu hold 1.5 s opens VR settings | not reported on: the first wear used the Menu hold on 641dd62, where it still offered the launcher restart; the VR settings themselves were opened with Menu + View on the second wear |
 | View held 1 s: recentre | played in headset (first wear) |
@@ -629,8 +641,10 @@ file is removed if you ask for `--diag-reset`).
 8. Quit (30 s): the SteamVR menu's quit: back in the Steam library without a hang?
 
 Questions: scale and `PlayerHeight`; HUD distance and legibility; any discomfort (what, when);
-which button labels or positions felt wrong (X/Y, D-pad, bumpers); whether 72 Hz held (the
-launcher's Show stats); did the controllers' tracking/hand poses look right.
+which button labels or positions felt wrong (X/Y, D-pad, bumpers); whether 120 Hz held (the
+launcher's Show stats; GoldenEyeVR must be set to 120 Hz in SteamVR's per-app settings); is the
+2160 eye sharp, and do the HUD, ammo and weapon panels look as before (they come from the new HUD
+atlas); did the controllers' tracking/hand poses look right.
 
 ## 10. Wear feedback 2026-10-04
 
@@ -662,7 +676,78 @@ Fourth wear (6425527, late on 2026-10-04; the 3D cinema was merged after it):
 | (asked) The 3D cinema's depth may be shallow | measured: the far hills 38 mm apart on the 3 m screen (24 px), about 7.4 m away. A Cinema depth setting (50-150 %) is on the DISPLAY page (section 4). Not worn |
 
 
-## 11. Eye resolution and MSAA (measured 2026-10-04)
+## 11. Display: 120 Hz at a 2160 eye (measured 2026-10-05)
+
+The standard's target (section 9 of `standard.md`): 120 Hz at about the panel's own 2160 an eye.
+
+**How GoldenEye gets 120 Hz.** The app can't change the rate on the Frame: SteamVR runs a Steam title
+at the rate set for it in SteamVR's per-app settings and offers only that one (Halo, Lambda1VR,
+2026-10-05). The user set GoldenEyeVR (`steam.app.2641698413`) to 120 Hz with resolution 2160 in
+the headset on 2026-10-05; from a Steam launch the log then reads `HMD recommended resolution: 2160 x
+2160`, `[vr] display: DisplayHz Auto, nothing requested; offered: 120; current 120 Hz` and `[vr]
+display running at 120.0 Hz (predictedDisplayPeriod 8.333 ms)`. An adb launch or a title without the
+per-app entry gets the display setting (72 or 90). Editing `steamvr.vrsettings` while SteamVR runs does
+nothing; set it in SteamVR's per-app settings. **The recommended per-app setting is 120 Hz** (it holds,
+below); 2160 resolution is optional, as Auto scales 1728 up to 2160 itself.
+
+**In the app** (`vr_refresh_math.h`, `vr_openxr.cpp` `vr_request_refresh_rate`, `vr_refresh_window`):
+`DisplayHz` 0 = Auto, the default, asks for nothing; 72, 90 or 120 are asked for once and only when
+offered. No fallback ladder (it could not take effect). After two 10 s windows in a row below 90% of
+the panel's rate while worn (focused and the runtime rendering; never `force_render`; a window with a
+stall over 250 ms, a load, does not count), one line recommends a per-app rate a step down: `[vr]
+refresh: 120 Hz not held while worn (...); consider setting GoldenEyeVR's per-app refresh rate to 90 Hz
+in SteamVR's settings`. The panel's rate is the shortest `predictedDisplayPeriod` seen: during a load
+SteamVR hands a late app 60, 30 or 24 Hz periods. Host test: `test_vr_refresh.c`.
+
+**Eye size.** `RenderScale` 0 = Auto, the default: the scale that makes the runtime's recommendation
+about 2160 (1.25 on the default 1728, 1.0 with the per-app 2160), so the eye images are created at
+their final size; 0.75-1.5 multiply the recommendation as before. `EyeMsaa` stays 2.
+
+### Where the frame time went (Dam, 120 Hz, 2160, MSAA 2, before the work)
+
+From `[vr-xr]` and `[vr-perf]` with `perf_legacy=15` (the old behaviour), per XR frame:
+
+- GPU eye pass 2.7-2.9 ms of 8.33 (the timer brackets the game's draws and the HUD captures).
+- Game thread CPU 3.3 ms (process 5.7 ms); `[vr-perf]`'s `cpu` of about 6.8 ms is mostly waiting.
+- Swapchain cycles: 3 a frame (the eyes, then the head-locked HUD and the ammo panel, each an
+  eye-sized 2160 x 2160 quad swapchain copied every XR frame with a full-screen shader). Release
+  about 0.7 ms a cycle (SteamVR's GLES binding, lesson 38); the eyes' acquire blocks about 3.2 ms (the
+  image comes back from the compositor: a wait, not work). `xrEndFrame` 0.45 ms.
+- Layers: 3 a frame, the head-locked HUD one of them although in Dam it was nearly always empty.
+- `glReadPixels` for the ammo panel's box: 2 a second, each waiting for the whole queued eye pass.
+- `xrSyncActions` and the 21 action queries: 0.03 ms a frame here (lesson 40's 1.2 ms did not show).
+
+### The changes
+
+| Change | What it removes |
+| --- | --- |
+| HUD atlas (`vr_hud_atlas_*`): one swapchain of W x H/2 (2160 x 1080) for the head-locked HUD (2:1) and the ammo and weapon panels (their crops, full size), filled once per game frame that changed a capture | two eye-sized swapchains (three with the weapon panel) and their copies on every XR frame; the compositor samples a smaller image; GoldenEye never draws the left-hand capture, so it has no swapchain. About 195 MB of swapchain memory at 2160 (four 2160² swapchains of three images became one 2160 x 1080). The captures themselves are still eye-sized two-layer targets (not changed) |
+| A capture is shown only when a draw landed in it | the empty eye-sized HUD quad |
+| The ammo panel's box read through a pixel buffer and a fence | the GPU stall twice a second |
+| Above 100 Hz, actions synced about once a game tick (12 ms); poses every frame | half the action queries (negligible here) |
+
+### Measured (2026-10-05, Steam launches, `force_render`, `timing=1`, walking forward the whole run, the last six 10 s windows: about 60 s)
+
+| Scene | Build | Eye | MSAA | Hz | GPU eye ms (mean / max) | Thread CPU ms | Process CPU ms | Missed / 60 s | Cycles / frame | Layers |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Dam | before (`perf_legacy=15`) | 2160² | 2 | 120 | 2.74 / 2.86 | 3.31 | 5.73 | **22** | 3.00 | 3.00 |
+| Dam | after | 2160² | 2 | 120 | 2.87 / 3.00 | 2.46 | 4.50 | **0** | 1.50 | 2.07 |
+| Dam | after, with the single-request refresh code (417897d less its panel-rate log change) | 2160² | 2 | 120 | 2.89 / 3.00 | 2.50 | 4.44 | **0** | 1.50 | 2.07 |
+| Dam | after but the stalling readback (`perf_legacy=2`) | 2160² | 2 | 120 | 2.73 / 2.84 | 2.46 | 4.38 | 1 | 1.50 | 2.03 |
+| Facility (LEVELID 34) | before | 2160² | 2 | 120 | 2.49 / 2.49 | 2.97 | 5.33 | 2 | 3.00 | 3.00 |
+| Facility | after | 2160² | 2 | 120 | 2.46 / 2.46 | 2.02 | 3.67 | **0** | 1.50 | 2.00 |
+| Facility | after | 2160² | 4 | 120 | 4.09 / 4.10 | 2.23 | 4.14 | 0 | 1.50 | 2.00 |
+
+All runs held 120.0 fps. The atlas copy costs 0.13-0.15 ms of GPU a frame (`gpu_aux`), half the XR
+frames skip it (`hud_skipped` 0.5 a frame). The old per-capture copies and the stall, not the eye
+pass, were what missed: the eye pass is the same before and after.
+
+**Defaults:** `DisplayHz` Auto (the per-app 120), `RenderScale` Auto (2160), `EyeMsaa` 2. 4x also held
+in Facility unattended (GPU 4.1 ms), but resolution comes before MSAA and a worn headset adds the
+compositor's scan-out, which standby runs don't include (lesson 79's Lambda1 note): 4x stays on the
+Graphics page to try. Not worn: whether 120 holds with the headset on, and the HUD atlas's look.
+
+### Earlier: 90 Hz, 1728 base (measured 2026-10-04, before the work above)
 
 `RenderScale` (0.75-1.5, times the runtime's recommended 1728 an eye; from the next start) and
 `EyeMsaa` (1, 2 or 4 samples on the eye pass, through `glFramebufferTextureMultisampleMultiviewOVR`,
@@ -686,7 +771,7 @@ the GPU timer around the eye pass (the scope and HUD captures included, the comp
 
 The eye pass never comes near the 11.1 ms period, yet misses grow with the eye size: the cost is
 outside the timer, most likely the compositor reading bigger layers and the eye-sized HUD capture
-targets (not profiled further). So the defaults are **RenderScale 1.0 and EyeMsaa 2**: the only
+targets (not profiled further). So the defaults were **RenderScale 1.0 and EyeMsaa 2** (superseded on 2026-10-05 by Auto: above): the only
 combination with no misses in all three of its runs, and 2 samples smooth the jagged polygon edges (the
 dumps' wall edges show the blended steps) for about 0.25 ms. 4 samples and 1.25 stay on the page
 for the wearer to try. Not worn: whether 2x MSAA is enough against "pixelated" is the next wear's
