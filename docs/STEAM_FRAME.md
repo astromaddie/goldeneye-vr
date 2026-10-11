@@ -1,109 +1,143 @@
 # GoldenEye VR on the Valve Steam Frame
 
-The Frame runs Android apps in **Lepton**, an Android 11 (API 30) container with arm64-v8a,
-OpenGL ES 3.2 (Mesa Zink on Turnip, Adreno 750) and SteamVR's OpenXR runtime. This port runs
-the Android/OpenXR build there, with multiview stereo, from a separate Gradle build type. The Frame
-version keeps the original port's tracked gun aiming, wrist watch, VR settings, laser pointer, scope
-and cinema views, and adds Frame controller bindings and persistent storage. The Frame controls and setup
-steps below cover this port; detailed implementation and historical device notes are in
-[VR_ARCHITECTURE.md](VR_ARCHITECTURE.md).
+The Frame runs Android apps in **Lepton**, its Android 11 (API 30) container. This port uses an ARM64 Android APK
+with OpenXR and multiview stereo. It keeps GoldenEye VR's tracked gun aiming, wrist watch, VR settings, laser pointer,
+scope and cinema views, with Frame controller bindings and persistent storage.
 
-## What differs from the Quest build
+## Build the APK
 
-| Area | Quest | Frame (`assembleFrame`) |
-| --- | --- | --- |
-| Application id | `com.gevr.port` | `com.gevr.port.frame` |
-| OpenXR loader | Meta's, `OpenXR/Libs/Android` | Khronos 1.1.63 from Maven Central, SHA-256 pinned, fetched at configure time into `third_party/` (git-ignored); `cmake/khronos_loader.cmake`. Lepton has no loader broker; it finds SteamVR via `/vendor/etc/openxr/1/active_runtime.json` |
-| Manifest | `src/main` | `src/main` + `src/frame/AndroidManifest.xml`: no Quest shell metadata, no installer permission, no `vr.highperformance`/overlay-keyboard features |
-| Data folder (ROM, settings, saves) | app external files dir | `/sdcard/Documents/GoldenEye` = the headset's `~/Documents/GoldenEye`, which survives Lepton resets |
-| Updater | GitHub self-update | not created (`BuildConfig.STEAM_FRAME`); the launcher sees an idle status |
-| CMake | - | `-DGEVR_STEAM_FRAME=ON` (also defines `GEVR_STEAM_FRAME` for C/C++) |
-| SDL | - | `SDLActivity` tolerates Lepton's missing clipboard service (null-safe for everyone) |
+Build on x86-64 Linux or macOS, or on Windows through WSL2 with an x86-64 Ubuntu distribution. These steps use Bash.
+On Apple Silicon, install Rosetta for the pinned NDK's x86-64 host tools. Steam Frame is ARM64 and is not a host for
+this Android toolchain. Android's [NDK downloads](https://developer.android.com/ndk/downloads) list the available host
+packages.
 
-## Build on a Mac (Apple Silicon)
+### Windows with WSL2
 
-One-time SDK pieces (the repo wants NDK 25.1 and CMake 3.22.1; NDK 29 fails, its Clang makes
-implicit function declarations an error, which the decomp sources rely on). NDK 25 ships x86_64
-host tools, so Rosetta must be installed.
+Install [WSL 2 and Ubuntu](https://learn.microsoft.com/en-us/windows/wsl/install). From PowerShell run as
+Administrator, install Ubuntu with:
 
-```bash
-export JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=$HOME/Library/Android/sdk
-sdkmanager --sdk_root=$ANDROID_HOME "platforms;android-34" "ndk;25.1.8937393" "cmake;3.22.1"
-cd android && sh ./gradlew assembleFrame     # first build ~2 min; downloads SDL2, zlib, opus, the loader
-# -> android/app/build/outputs/apk/frame/app-frame.apk   (signed with the debug key)
+```powershell
+wsl --install -d Ubuntu
 ```
 
-`sh ./gradlew` because the wrapper is not executable in git. The Quest builds
-(`assembleDebug` / `assembleRelease`) are unchanged.
-
-## Deploy
-
-```bash
-tools/steam_frame/deploy.sh --rom "/path/to/GoldenEye 007 (USA).z64" --register-title   # once
-tools/steam_frame/deploy.sh                                                              # install + start over adb
-```
-
-`FRAME_HOST` (default `steamos@192.168.1.31`, the Frame on Wi-Fi; `steamos@10.86.200.233` over
-USB networking) and `FRAME_ADB_HOST` override the targets. adb needs **Lepton Development**
-running (start it from the Frame's Steam library; its adbd is on `<frame>:5555`). It deletes its
-apps when it exits, so to play use the persistent **GoldenEyeVR** title in the Steam library
-(a Lepton devkit title, `~/devkit-game/GoldenEyeVR/GoldenEye-VR.apk`; every later `deploy.sh`
-refreshes that copy). `deploy.sh --help` lists the rest.
-
-The ROM must be the US retail dump (SHA-1 `abe01e4aeb033b6c0836819f549c791b26cfde83`) at
-`~/Documents/GoldenEye/ge.z64`. It is never committed. Settings (`goldeneye-vr.ini`), saves
-(`eeprom.bin`) and the `texture-packs` index land in the same folder.
-
-## Unattended testing (nothing worn)
-
-A headset on a desk is in `SYNCHRONIZED` with `shouldRender=false`, so the launcher would wait for
-ever and the multiview path would never draw. Frame-only test switches live in
-`~/Documents/GoldenEye/vr-diag.ini` (set with `deploy.sh --diag KEY=VAL`, listed with their effects in
-[VR_ARCHITECTURE.md](VR_ARCHITECTURE.md) section 6): `force_render`, `diag_yaw`, `dump_frame`,
-`dump_stereo_frame`, `boot_stage` (33 = Dam), `difficulty`, `autostart`, `timing`. With force_render the
-game draws from a synthetic head at 1.6 m with parked hands while the sim keeps running; `boot_stage`
-plus `autostart` land in a solo mission with no controller; the dumps are `vr-dumps/vr-eye0.bmp`,
-`vr-eye1.bmp`, `vr-hud.bmp` and `vr-state.txt`. Remove them (`--diag-reset`) before playing.
+Restart Windows if prompted, open Ubuntu, and create its Linux user. Do the build in Ubuntu, with the checkout and
+Android SDK under Linux `~` (for example `~/src`), not under `/mnt/c`. Install the Linux JDK and tools inside Ubuntu;
+a Windows JDK or Android SDK is not used by the WSL build:
 
 ```bash
-tools/steam_frame/deploy.sh --clear-dumps --diag force_render=1 --diag autostart=1 --diag boot_stage=33 \
-    --diag dump_stereo_frame=480 --diag diag_yaw=90 --logcat 80 --pull-dumps scratchpad/dumps/yaw90
-tools/steam_frame/analyze_dump.py scratchpad/dumps/yaw90      # numbers for the stereo check (numpy, pillow)
-tools/steam_frame/tests/run_tests.sh                          # host tests: bindings, View state machine
+sudo apt update
+sudo apt install -y openjdk-17-jdk git curl unzip zip openssh-client
+export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+export ANDROID_HOME="$HOME/Android/Sdk"
+export PATH="$JAVA_HOME/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+mkdir -p "$ANDROID_HOME/cmdline-tools/latest" /tmp/android-cmdline-tools
+curl -fL -o /tmp/commandlinetools-linux.zip \
+  https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip
+unzip -q /tmp/commandlinetools-linux.zip -d /tmp/android-cmdline-tools
+mv /tmp/android-cmdline-tools/cmdline-tools/* "$ANDROID_HOME/cmdline-tools/latest/"
 ```
 
-`--logcat 40` captures the run to `scratchpad/frame-logcat.txt`. Evidence lines:
-`OpenXR Runtime:`, `Session created`, `Swapchain eye=0 ... arraySize=2 multiview=1`,
-`multiview FBO COMPLETE`, `Session state changed`, `[vr-frame]`, `[vr-perf]`, `[vr-dump]`,
-`[VR_CTRL] xrSuggestInteractionProfileBindings`, `rom: loaded ge.z64`, `pump: N retraces, M xr frames`.
-`--input "1000 0 0 30"` queues the PC test hook (N64 button mask, stick, frames) once.
+The Linux command-line tools archive and `sdkmanager` are documented on Google's [Android Studio downloads](https://developer.android.com/studio)
+and [`sdkmanager` pages](https://developer.android.com/tools/sdkmanager). Keep this Ubuntu terminal open so the
+environment variables remain set.
 
-## Verified, and at which level
+Clone the public Frame branch into the Linux home directory:
 
-| Claim | Level |
-| --- | --- |
-| Frame APK builds on a Mac, carries the Khronos loader (not Meta's), Quest debug build and its JVM tests still build/pass | host build |
-| Installs in Lepton Development; SDL activity starts after the clipboard fix | unattended device |
-| Khronos loader finds SteamVR (`SteamVR/OpenXR 2.17.10`) with the OpenGL ES binding; session, 1832x1832 sRGB swapchain, `arraySize=2`, multiview FBO `COMPLETE` (0x8cd5, no GL error) | unattended device |
-| Frame loop at 72 Hz (720 `xrWaitFrame`/`xrEndFrame` per 10 s), natural standby (`shouldRender=0` after frame 1, empty frames) and forced render | unattended device |
-| ROM read from `~/Documents/GoldenEye/ge.z64` (`rom: loaded ge.z64`), game boots through the title into the attract loop at 60 retraces/s, ~35-50k tris/frame | unattended device (force-render + Start hook) |
-| `/sdcard/Documents` access without all-files access (it is a symlink to the host folder in Lepton 2.8.14) | unattended device |
-| `GoldenEyeVR` devkit title registered (`steamos-list-games` lists it) | unattended device; **not launched from the Steam library** |
-| Anything about what the eyes see, controllers, comfort, performance under gameplay, audio | **not verified (nothing worn)** |
+```bash
+mkdir -p ~/src && cd ~/src
+git clone --branch steam-frame https://github.com/astromaddie/goldeneye-vr.git
+cd goldeneye-vr
+```
 
-## Open problems / next
+Install JDK 17, Android SDK command-line tools, Git, and the Android packages pinned by this branch: SDK platform 34,
+build-tools 34.0.0, NDK 25.1.8937393 and CMake 3.22.1. The Gradle wrapper is 8.4 and the Android Gradle Plugin is
+8.1.2. On Linux/macOS only, set these variables to the JDK 17 and Android SDK locations for that host (skip this
+block if you followed the Windows/WSL setup above):
 
-- **Controllers.** The Frame's `/interaction_profiles/valve/frame_controller_valve`
-  (`XR_VALVE_frame_controller_interaction`) is not bound; the app binds simple, Touch, Vive, WMR
-  and Motion, so it may or may not get input through SteamVR's remapping. Bind the Frame
-  profile first.
-- Not launched from the Steam library yet: confirm the title starts, writes to
-  `~/Documents/GoldenEye` and gets focus when worn.
-- Only 72 Hz is offered (`display: 90 Hz not offered`); render resolution is the app's 1832x1832
-  (recommended 1728).
-- The "Offer test builds" launcher checkbox still shows although the updater is off. Texture
-  packs from the Mods page are stored in the app's files dir (wiped by a Lepton reset); the
-  index in the data folder is persistent.
-- Multiplayer/lobby code is untouched and only started in the background; not exercised.
-- `ramrom: demo data not bound` is printed once from the attract loop; it is upstream's gap,
-  not Frame-specific.
+```bash
+export JAVA_HOME="/path/to/jdk-17"
+export ANDROID_HOME="/path/to/android-sdk"
+export PATH="$JAVA_HOME/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+```
+
+Accept the Android SDK licenses, then install the pinned packages in the same terminal:
+
+```bash
+sdkmanager --sdk_root="$ANDROID_HOME" --licenses
+sdkmanager --sdk_root="$ANDROID_HOME" \
+  "platform-tools" "platforms;android-34" "build-tools;34.0.0" \
+  "ndk;25.1.8937393" "cmake;3.22.1"
+```
+
+For Linux and macOS, install the command-line tools for that host from Google's [Android Studio downloads](https://developer.android.com/studio)
+page and put their `cmdline-tools` contents under `<android-sdk>/cmdline-tools/latest` before running the setup above.
+
+On Windows through WSL2, clone from Ubuntu into `~/src` and run the build there. A Windows file such as
+`C:\Users\WindowsUser\Documents\ge.z64` appears to WSL as `/mnt/c/Users/WindowsUser/Documents/ge.z64`; replace
+`WindowsUser` with the Windows account name. The Frame game reads its ROM from `~/Documents/GoldenEye/ge.z64` on
+the headset.
+
+From the repository root, build the Frame variant:
+
+```bash
+cd android
+sh ./gradlew assembleFrame
+```
+
+Gradle downloads the Khronos OpenXR loader during configuration. The APK is
+`android/app/build/outputs/apk/frame/app-frame.apk`, signed with the debug key.
+
+## Install and run
+
+If Steam's Devkit Client is running on Windows, copy the built APK from WSL to a Windows folder so the client can
+browse it. From the repository root in Ubuntu:
+
+```bash
+windows_user="$(cmd.exe /C echo %USERNAME% | tr -d '\r')"
+mkdir -p "/mnt/c/Users/$windows_user/Downloads/GoldenEyeVR"
+cp android/app/build/outputs/apk/frame/app-frame.apk \
+  "/mnt/c/Users/$windows_user/Downloads/GoldenEyeVR/"
+```
+
+Use Valve's [SteamOS Devkit Client](https://partner.steamgames.com/doc/steamhardware/steamframe/loadgames) from Steam
+on your desktop. Pair it once with the Frame: enable Developer Mode, choose **Settings > Developer > Pair new host**,
+then register the Frame in the client's **Devkits** tab and confirm pairing on the headset.
+
+For a first install, open **Devkits > Connect to devkit by IP**, choose **Title Upload**, and set:
+
+- **Name:** `GoldenEyeVR`
+- **Local Folder:** The folder containing the APK: the Windows Downloads folder copied above on WSL, or
+  `android/app/build/outputs/apk/frame` on Linux/macOS.
+- **Start Command:** `app-frame.apk`
+- **Runtime:** `Android`
+
+Upload and start the title. It then appears in the Frame's Steam library under **Library > Non-Steam > Devkit Game**.
+For later builds, upload again with the same title name to update that library entry. Steam launches provide the
+Frame controller input.
+
+## Game data
+
+Supply your own NTSC-U retail GoldenEye 007 ROM. The known retail image has SHA-1
+`abe01e4aeb033b6c0836819f549c791b26cfde83`. Put it at `~/Documents/GoldenEye/ge.z64` on the Frame. Settings, saves
+and texture-pack data are stored in the same folder; the ROM and extracted game data are not part of this repository.
+
+To copy the ROM from your build computer, enable Developer Mode and set the SteamOS password using Valve's
+[Steam Frame setup guide](https://partner.steamgames.com/doc/steamhardware/steamframe/setup). Valve's
+[debugging guide](https://partner.steamgames.com/doc/steamhardware/steamframe/debugging) documents SSH as
+`steamos@frame`. Set `FRAME_HOST` to `frame` or the Frame's IP address; enter the password you set when SSH asks.
+These commands use the host's OpenSSH `ssh` and `scp` clients; install `openssh-client` on Ubuntu (included in the
+WSL setup above).
+From WSL, a ROM saved in Windows Documents is at `/mnt/c/Users/WindowsUser/Documents/ge.z64`; replace
+`WindowsUser` with your Windows account name. From the build computer, run:
+
+```bash
+export FRAME_HOST=frame  # replace with the Frame's IP if its hostname does not resolve
+ROM="/mnt/c/Users/WindowsUser/Documents/ge.z64"  # use the local file path on Linux/macOS
+ssh "steamos@$FRAME_HOST" 'mkdir -p /home/steamos/Documents/GoldenEye'
+scp "$ROM" "steamos@$FRAME_HOST:/home/steamos/Documents/GoldenEye/ge.z64"
+```
+
+## Performance
+
+The recorded attract-loop run measured 60 game retraces per second at a 72 Hz SteamVR rate, with about 35,000–50,000
+triangles per frame.

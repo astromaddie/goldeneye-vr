@@ -16,24 +16,33 @@ The original GoldenEye VR port supplies the core VR game, weapons, watch and sco
 
 Multi-device netplay hasn't been tested yet.
 
-The [Steam Frame guide](docs/STEAM_FRAME.md) covers building, deploying and supplying your own game data. The [architecture notes](docs/VR_ARCHITECTURE.md) describe the Frame controls, watch, scope and rendering. The Quest README is preserved in [README_QUEST.md](README_QUEST.md).
+The [Steam Frame guide](docs/STEAM_FRAME.md) covers building, installing and supplying your own game data. The [architecture notes](docs/VR_ARCHITECTURE.md) describe the Frame controls, watch, scope and rendering. The Quest README is preserved in [README_QUEST.md](README_QUEST.md).
 
 ## Build and install
 
-Build the Frame variant on Apple Silicon macOS with JDK 17 and the pinned Android SDK/NDK tools:
+Build on x86-64 Linux or macOS, or on Windows through WSL2 with an x86-64 Ubuntu distribution. The build guide uses
+Bash. On Apple Silicon, install Rosetta for the pinned NDK host tools; Steam Frame itself is ARM64 and is not a host
+for this Android build.
+
+Clone the Frame branch:
 
 ```sh
-git clone --recurse-submodules --branch steam-frame https://github.com/astromaddie/goldeneye-vr.git
+mkdir -p ~/src
+cd ~/src
+git clone --branch steam-frame https://github.com/astromaddie/goldeneye-vr.git
 cd goldeneye-vr
-export JAVA_HOME="/path/to/jdk-17"
-export ANDROID_HOME="/path/to/android-sdk"
-sdkmanager --sdk_root="$ANDROID_HOME" "platforms;android-34" "ndk;25.1.8937393" "cmake;3.22.1"
-git submodule update --init --recursive
+```
+
+Use JDK 17 and the Android SDK versions in the [Steam Frame build and install guide](docs/STEAM_FRAME.md), then build
+the Frame variant:
+
+```sh
 cd android
 sh ./gradlew assembleFrame
 ```
 
-The APK is written to `android/app/build/outputs/apk/frame/app-frame.apk`. Use the [Steam Frame guide](docs/STEAM_FRAME.md) to install it and place your own ROM in persistent storage.
+The APK is `android/app/build/outputs/apk/frame/app-frame.apk`. Building creates the APK; it does not install or
+launch it. The guide covers your own ROM and uploading or updating the title with Valve's SteamOS Devkit Client.
 
 ## Credits and licenses
 
