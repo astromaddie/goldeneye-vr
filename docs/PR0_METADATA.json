@@ -2,7 +2,7 @@
   "schema_version": 1,
   "milestone": "PR0",
   "status": "EXPERIMENTAL",
-  "publication_status": "prepared for public experimental source; no binary release published",
+  "publication_status": "public experimental source; no binary release",
   "tested_commit": "2023d85d1893cab3490597ce395253b01e821103",
   "supported_targets": [
     "Steam Frame Lepton / Android ARM64 / SteamVR OpenXR"
@@ -23,5 +23,6 @@
   "source_scope_note": "The archived upstream README identifies src/ as n64decomp/007 code and no upstream license grant is present in that repository. Preparing this experimental source does not add a grant or change the scope of retained notices.",
   "license_scope": "Root and component notices apply only to their stated contributions; they do not grant rights to commercial game code, ROMs, extracted media, saves or proprietary libraries.",
   "changelog": "CHANGELOG.md",
-  "distribution_blockers": []
+  "distribution_blockers": [],
+  "publication_date": "2026-10-11"
 }
