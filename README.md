@@ -4,6 +4,8 @@ This is my Steam Frame fork of [GoldenEye VR](https://github.com/MrSco/goldeneye
 
 **EXPERIMENTAL.** This is a personal-use port and remains a work in progress. It targets the Valve Steam Frame. You need your own NTSC-U GoldenEye 007 game data; no ROM, extracted game data or saves are included.
 
+**Want to play on Steam Frame?** Download the prebuilt standalone APK from the [v0.1.0 prerelease](https://github.com/astromaddie/goldeneye-vr/releases/tag/v0.1.0); no compiler is needed. You still need your own NTSC-U GoldenEye 007 game data.
+
 The original GoldenEye VR port supplies the core VR game, weapons, watch and scope. This fork adds the Frame build, controller support and persistent storage, along with the Frame-specific presentation and menu changes.
 
 ## VR features and Frame changes
