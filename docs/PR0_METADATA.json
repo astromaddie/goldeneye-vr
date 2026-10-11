@@ -2,23 +2,27 @@
   "schema_version": 1,
   "milestone": "PR0",
   "status": "EXPERIMENTAL",
-  "publication_status": "private preparation; no release published",
-  "tested_commit": "8707630e34e24092d85bb870c15f225df7d8e40d",
+  "publication_status": "private; source license review required",
+  "tested_commit": "2023d85d1893cab3490597ce395253b01e821103",
   "supported_targets": [
     "Steam Frame Lepton / Android ARM64 / SteamVR OpenXR"
   ],
   "validation": {
-    "commit": "8707630e34e24092d85bb870c15f225df7d8e40d",
-    "initial_fresh_clone_status": "clean",
-    "command": "bash tools/steam_frame/tests/run_tests.sh",
-    "result": "PASS; canonical host suite, 9 binding profiles checked and all math/system/settings tests passed"
+    "commit": "2023d85d1893cab3490597ce395253b01e821103",
+    "fresh_checkout": "Clean local no-hardlinks clone; public dependency downloads; isolated shell, Java and Gradle homes; no Git credentials or signing secrets",
+    "host_command": "bash tools/steam_frame/tests/run_tests.sh",
+    "host_result": "PASS: binding profiles and production system, movement, aim, screen, cinema, upright, scope, pointer, refresh and settings suites",
+    "build_command": "cd android && sh ./gradlew assembleFrame --no-daemon --max-workers=4",
+    "build_result": "PASS: current ARM64 Frame APK signed with a newly generated temporary debug key",
+    "apk_sha256": "1e7af156f072096205b4fb668ef788e2d8bd7f75c76fdf1bb95e6e2cf844f19e",
+    "apk_signature": "PASS v2",
+    "16KiB_zip_alignment": "FAIL: current Gradle packaging uses 4KiB native-library offsets"
   },
-  "full_application_build": "not run for PR0",
-  "focused_headset_acceptance": "pending for a clean candidate; historical results are documented separately",
-  "sustained_worn_performance": "unmeasured on current candidate",
+  "full_application_build": "PASS: ROM-free Frame APK",
+  "focused_headset_acceptance": "No new device session in this source/build review; see README for current game features",
   "distribution_blockers": [
-    "Reconstructed commercial source and media permissions unresolved"
+    "Archived upstream README identifies src/ as n64decomp/007 code without an upstream license; permission scope remains unresolved"
   ],
   "license_scope": "Retained component notices apply to their stated code; they do not grant redistribution rights to commercial ROMs, extracted media, saves or proprietary libraries.",
-  "changelog": "README.md#pr0-changelog"
+  "changelog": "CHANGELOG.md"
 }
