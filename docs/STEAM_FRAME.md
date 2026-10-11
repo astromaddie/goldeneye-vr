@@ -1,5 +1,7 @@
 # GoldenEye VR on the Valve Steam Frame
 
+> Historical phase 0–1 snapshot, written 2026-10-02. It predates later device and wearer work. Use [docs/PR0_READINESS.md](PR0_READINESS.md) for the current source boundary and [VR_ARCHITECTURE.md](VR_ARCHITECTURE.md) for feature-by-feature evidence.
+
 The Frame runs Android apps in **Lepton**, an Android 11 (API 30) container with arm64-v8a,
 OpenGL ES 3.2 (Mesa Zink on Turnip, Adreno 750) and SteamVR's OpenXR runtime. This port runs
 the existing Android/OpenXR build there, with the multiview stereo path, from a separate
