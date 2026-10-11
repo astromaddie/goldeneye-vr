@@ -2,7 +2,7 @@
   "schema_version": 1,
   "milestone": "PR0",
   "status": "EXPERIMENTAL",
-  "publication_status": "private; source license review required",
+  "publication_status": "prepared for public experimental source; no binary release published",
   "tested_commit": "2023d85d1893cab3490597ce395253b01e821103",
   "supported_targets": [
     "Steam Frame Lepton / Android ARM64 / SteamVR OpenXR"
@@ -16,13 +16,12 @@
     "build_result": "PASS: current ARM64 Frame APK signed with a newly generated temporary debug key",
     "apk_sha256": "1e7af156f072096205b4fb668ef788e2d8bd7f75c76fdf1bb95e6e2cf844f19e",
     "apk_signature": "PASS v2",
-    "16KiB_zip_alignment": "FAIL: current Gradle packaging uses 4KiB native-library offsets"
+    "16KiB_zip_alignment": "FAIL: native libraries are at 4KiB ZIP offsets; no Android 15 compatibility claim is made"
   },
   "full_application_build": "PASS: ROM-free Frame APK",
   "focused_headset_acceptance": "No new device session in this source/build review; see README for current game features",
-  "distribution_blockers": [
-    "Archived upstream README identifies src/ as n64decomp/007 code without an upstream license; permission scope remains unresolved"
-  ],
-  "license_scope": "Retained component notices apply to their stated code; they do not grant redistribution rights to commercial ROMs, extracted media, saves or proprietary libraries.",
-  "changelog": "CHANGELOG.md"
+  "source_scope_note": "The archived upstream README identifies src/ as n64decomp/007 code and no upstream license grant is present in that repository. Preparing this experimental source does not add a grant or change the scope of retained notices.",
+  "license_scope": "Root and component notices apply only to their stated contributions; they do not grant rights to commercial game code, ROMs, extracted media, saves or proprietary libraries.",
+  "changelog": "CHANGELOG.md",
+  "distribution_blockers": []
 }

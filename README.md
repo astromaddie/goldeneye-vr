@@ -35,4 +35,4 @@ The APK is written to `android/app/build/outputs/apk/frame/app-frame.apk`. Use t
 
 ## Credits and licenses
 
-This fork is based on [MrSco/goldeneye-vr](https://github.com/MrSco/goldeneye-vr). The root MIT notice applies to the project's original contributions; retained third-party components keep their own notices. Those notices do not grant rights to commercial game code, media or ROMs. Bring your own game data.
+This fork is based on [MrSco/goldeneye-vr](https://github.com/MrSco/goldeneye-vr). The root MIT notice applies to contributions within its stated scope; retained third-party components keep their own notices. Those notices do not grant rights to commercial game code, media or ROMs. Bring your own game data.
