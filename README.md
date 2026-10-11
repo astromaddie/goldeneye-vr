@@ -1,43 +1,38 @@
-# GoldenEye VR for Steam Frame — experimental technical preview
+# GoldenEye VR for Steam Frame
 
-This private fork adds a native Steam Frame target to GoldenEye VR: Lepton (Android 11/API 30), arm64-v8a, GLES 3.2, SteamVR OpenXR, and multiview rendering. It is an experimental port preview and makes no complete-gameplay claim.
+This is my Steam Frame fork of [GoldenEye VR](https://github.com/MrSco/goldeneye-vr). It runs on the headset through Lepton, Android, SteamVR OpenXR and multiview rendering; no PC streaming is needed.
 
-The upstream project is [MrSco/goldeneye-vr](https://github.com/MrSco/goldeneye-vr). General GoldenEye VR fixes belong upstream; Frame-specific work belongs in this fork and needs owner access. The Quest-oriented README is preserved in [README_QUEST.md](README_QUEST.md). This repository remains private.
+**EXPERIMENTAL.** This is a personal-use port and remains a work in progress. It targets the Valve Steam Frame. You need your own NTSC-U GoldenEye 007 game data; no ROM, extracted game data or saves are included.
 
-## Capability evidence
+The original GoldenEye VR port supplies the core VR game, weapons, watch and scope. This fork adds the Frame build, controller support and persistent storage, along with the Frame-specific presentation and menu changes.
 
-| Capability | Host | Frame on desk | Worn |
-|---|---|---|---|
-| Build and OpenXR | Host test suite passed at source 61fb1cf; no PR0 APK build was run. | Earlier installs reached SteamVR OpenXR with multiview and booted selected scenes. | Current-head install/launch has not been rechecked while worn. |
-| Movement and aim | Movement, aim-math and binding tests passed. | Synthetic input/captures exercised selected Dam movement and aim paths. | Older builds were worn for movement and gun aim; current input acceptance is open. |
-| Menus, watch, HUD and pointer | System, screen, pointer and settings tests passed. | Selected menu, watch, HUD and pointer paths were captured with a synthetic head. | Later pointer correction has not been re-worn. |
-| Scope and cutscenes | Scope/cinema tests passed. | Later scope placement and pointer ordering were checked unattended. | 3D cinema was worn on round three; the scope redesign after its observed drift has not been re-worn. |
-| Performance and gameplay | Host checks do not establish device pacing or full gameplay. | Dam and Facility measured 120 fps with zero missed frames in a 60-second unattended run on an earlier build. | Current-source pacing and full campaign acceptance are unmeasured. |
+## VR features and Frame changes
 
-The known intro depth complaint was not reproduced in the diagnostics; a narrow sky strip at picture edges was observed. Online exit, seated mode, spatial audio, depth submission, foveation, the full Graphics page, and current-source comfort remain open. See [docs/VR_ARCHITECTURE.md](docs/VR_ARCHITECTURE.md) and [docs/PR0_READINESS.md](docs/PR0_READINESS.md).
+- Head-tracked stereo play with the gun aimed from the controller pose, two-handed weapon handling and a configurable gun fit.
+- Frame controller bindings, with snap or smooth turning, a left-handed layout and a comfort vignette.
+- A virtual Bond watch with mission pages and in-game VR settings, plus a laser pointer for menus.
+- A 3D cinema presentation for cutscenes, a tracked scope view and VR HUD elements.
+- A separate Frame Gradle build and persistent game files under `~/Documents/GoldenEye`.
 
-## Build and test
+The [Steam Frame guide](docs/STEAM_FRAME.md) covers building, deploying and supplying your own game data. The [architecture notes](docs/VR_ARCHITECTURE.md) describe the Frame controls, watch, scope and rendering. The Quest README is preserved in [README_QUEST.md](README_QUEST.md).
 
-On Apple Silicon macOS, install JDK 17, Android SDK platform 34, NDK 25.1.8937393, CMake 3.22.1, and Rosetta. NDK 29 is incompatible with this decompilation source's implicit-function warnings.
+## Build and install
 
-~~~sh
-export JAVA_HOME=/opt/homebrew/opt/openjdk@17
-export ANDROID_HOME=$HOME/Library/Android/sdk
-sdkmanager --sdk_root=$ANDROID_HOME "platforms;android-34" "ndk;25.1.8937393" "cmake;3.22.1"
+Build the Frame variant on Apple Silicon macOS with JDK 17 and the pinned Android SDK/NDK tools:
+
+```sh
+git clone --recurse-submodules --branch steam-frame https://github.com/astromaddie/goldeneye-vr.git
+cd goldeneye-vr
+export JAVA_HOME="/path/to/jdk-17"
+export ANDROID_HOME="/path/to/android-sdk"
+sdkmanager --sdk_root="$ANDROID_HOME" "platforms;android-34" "ndk;25.1.8937393" "cmake;3.22.1"
 git submodule update --init --recursive
-tools/steam_frame/tests/run_tests.sh
 cd android
 sh ./gradlew assembleFrame
-~~~
+```
 
-The debug APK output is android/app/build/outputs/apk/frame/app-frame.apk. Playing requires a legally obtained US NTSC-U GoldenEye 007 ROM named `ge.z64` at `~/Documents/GoldenEye/ge.z64` (also `/sdcard/Documents/GoldenEye/ge.z64` on Lepton), plus player data outside the repository. No commercial game ROM, extracted game data, or saves are included.
+The APK is written to `android/app/build/outputs/apk/frame/app-frame.apk`. Use the [Steam Frame guide](docs/STEAM_FRAME.md) to install it and place your own ROM in persistent storage.
 
-## Rights and distribution
+## Credits and licenses
 
-The root MIT notice applies to this project's original port and VR contributions. Retained third-party components keep the license terms in their own notices, as listed in [CREDITS.md](CREDITS.md) and adjacent license files. These notices do not establish a distribution grant for all reconstructed commercial game code, GoldenEye 007, ROMs, or copyrighted media. Source and media permission remains unresolved. No release package or visibility change is included in PR0.
-
-## PR0 changelog
-
-- Preserved the Quest root README and replaced it with a private Frame technical preview.
-- Marked the older phase 0–1 Frame snapshot as historical in docs/STEAM_FRAME.md.
-- Added source IDs, exact evidence levels, open acceptance, and publication blockers in docs/PR0_READINESS.md.
+This fork is based on [MrSco/goldeneye-vr](https://github.com/MrSco/goldeneye-vr). The root MIT notice applies to the project's original contributions; retained third-party components keep their own notices. Those notices do not grant rights to commercial game code, media or ROMs. Bring your own game data.

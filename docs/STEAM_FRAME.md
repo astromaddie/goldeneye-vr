@@ -1,16 +1,12 @@
 # GoldenEye VR on the Valve Steam Frame
 
-> Historical phase 0–1 snapshot, written 2026-10-02. It predates later device and wearer work. Use [docs/PR0_READINESS.md](PR0_READINESS.md) for the current source boundary and [VR_ARCHITECTURE.md](VR_ARCHITECTURE.md) for feature-by-feature evidence.
-
 The Frame runs Android apps in **Lepton**, an Android 11 (API 30) container with arm64-v8a,
 OpenGL ES 3.2 (Mesa Zink on Turnip, Adreno 750) and SteamVR's OpenXR runtime. This port runs
-the existing Android/OpenXR build there, with the multiview stereo path, from a separate
-Gradle build type so the Quest build stays as upstream has it.
-
-Status (2026-10-02): phase 0-1. The app installs, finds the ROM in persistent storage, creates
-an OpenXR session, runs its frame loop with multiview and boots the game to the title/attract
-loop, all proven in logcat with the headset **not worn**. Controllers and gameplay on the Frame
-are untested.
+the Android/OpenXR build there, with multiview stereo, from a separate Gradle build type. The Frame
+version keeps the original port's tracked gun aiming, wrist watch, VR settings, laser pointer, scope
+and cinema views, and adds Frame controller bindings and persistent storage. The Frame controls and setup
+steps below cover this port; detailed implementation and historical device notes are in
+[VR_ARCHITECTURE.md](VR_ARCHITECTURE.md).
 
 ## What differs from the Quest build
 
