@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "milestone": "PR0",
+  "status": "EXPERIMENTAL",
+  "publication_status": "private preparation; no release published",
+  "tested_commit": "8707630e34e24092d85bb870c15f225df7d8e40d",
+  "supported_targets": [
+    "Steam Frame Lepton / Android ARM64 / SteamVR OpenXR"
+  ],
+  "validation": {
+    "commit": "8707630e34e24092d85bb870c15f225df7d8e40d",
+    "initial_fresh_clone_status": "clean",
+    "command": "bash tools/steam_frame/tests/run_tests.sh",
+    "result": "PASS; canonical host suite, 9 binding profiles checked and all math/system/settings tests passed"
+  },
+  "full_application_build": "not run for PR0",
+  "focused_headset_acceptance": "pending for a clean candidate; historical results are documented separately",
+  "sustained_worn_performance": "unmeasured on current candidate",
+  "distribution_blockers": [
+    "Reconstructed commercial source and media permissions unresolved"
+  ],
+  "license_scope": "Retained component notices apply to their stated code; they do not grant redistribution rights to commercial ROMs, extracted media, saves or proprietary libraries.",
+  "changelog": "README.md#pr0-changelog"
+}

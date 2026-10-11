@@ -2,6 +2,8 @@
 
 Visibility remains private. This document distinguishes source tests, historical device tests, and wearer acceptance.
 
+The immutable PR0 test commit, supported targets and final host-check results are in [PR0_METADATA.json](PR0_METADATA.json). Full application builds and focused wearer acceptance remain pending.
+
 ## Source and test identity
 
 - Current source revision: 61fb1cf916ba308e13ca4eeb4c667b31ceb6f4fd.
