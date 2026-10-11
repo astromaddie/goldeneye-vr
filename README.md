@@ -14,6 +14,8 @@ The original GoldenEye VR port supplies the core VR game, weapons, watch and sco
 - A 3D cinema presentation for cutscenes, a tracked scope view and VR HUD elements.
 - A separate Frame Gradle build and persistent game files under `~/Documents/GoldenEye`.
 
+Multi-device netplay hasn't been tested yet.
+
 The [Steam Frame guide](docs/STEAM_FRAME.md) covers building, deploying and supplying your own game data. The [architecture notes](docs/VR_ARCHITECTURE.md) describe the Frame controls, watch, scope and rendering. The Quest README is preserved in [README_QUEST.md](README_QUEST.md).
 
 ## Build and install
