@@ -4,7 +4,7 @@ This is an experimental native Quest multiplayer mode. It uses ENet and borrows 
 
 ## Network setup
 
-- Use the same APK version on every headset. The current game and discovery protocol version is `10`; the lobby service lists and joins only games on the same protocol, so an earlier test build or release cannot join a protocol 10 game.
+- Use builds with the same game and discovery protocol on every headset. The current protocol version is `15`; LAN discovery and the game connection reject incompatible protocol versions, so use matching builds.
 - The host listens for ENet game traffic on UDP `27007`.
 - LAN discovery broadcasts on UDP `27008`. If discovery does not work on the Wi-Fi network, connect to the host's local IP directly.
 - Internet games use the lobby service at `lobbies.goldeneyevr.com` for discovery and ICE signaling. Native libjuice carries ENet datagrams directly where possible and through Cloudflare TURN when needed, so players do not configure router forwarding. The host can have a mix of LAN and internet players in the same four-player lobby.
@@ -57,7 +57,7 @@ Allow microphone access when hosting or joining to talk. Denying it leaves voice
 
 ## Two-headset test
 
-1. Install the same debug APK on both Quest headsets and connect them to the same LAN.
+1. Use matching builds from the same source revision and protocol 15: launch the Frame variant through Steam on Steam Frame, and the Quest-native variant on Quest. Connect both headsets to the same LAN.
 2. On one headset open **ONLINE MULTIPLAYER** > **Host Game** and choose **START HOSTING LOBBY**.
 3. On the other choose **Join Game (LAN / Direct IP)**. Select the discovered host or enter its LAN IP and press **Connect**.
 4. Choose a character, check **I am Ready**, then on the host press **LAUNCH MULTIPLAYER MATCH!**.
@@ -88,5 +88,7 @@ Allow microphone access when hosting or joining to talk. Denying it leaves voice
    - Spectators: a late joiner during live play spectates a living player; A/B buttons cycle between living players; spectator voice is heard only by other spectators.
    - Dual wielding: with dual wield enabled (doubles or any-two), both hands fire with independent aim and view passes, and gunfire sounds originate from the firing hand.
    - Loadouts: players spawn with their selected 4-gun kit, equipped with their primary weapon.
+
+Host-native tests currently cover the production IPv4 LAN discovery path and an actual two-peer IPv6 ENet roundtrip. These checks do not verify Android headset networking. Android IPv4 paired play, focus transitions, and reconnect behavior remain pending headset testing. Use the same LAN for the paired test; when broadcast discovery is blocked, connect to the host's reachable LAN IP directly.
 
 The mode still needs a two-headset playtest of steps 8 and 9. Also test two separate home networks, a phone hotspot, a four-player game with mixed LAN and internet joins, private code visibility, and reconnecting after a disconnect. Confirm that damage and respawn state agree on all headsets after several kills.

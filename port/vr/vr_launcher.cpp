@@ -1163,7 +1163,7 @@ static void gevrLobbyRoster(const ImVec4 &gold) {
 void gevrMultiplayerPage(bool &open, bool &startMatch, const ImVec4 &gold, const ImVec4 &good, const ImVec4 &bad) {
     static int subTab = 0;     // 0 = Host, 1 = Join
     static int joinMethod = 0; // 0 = Public Internet, 1 = Private Code, 2 = LAN Games, 3 = Direct IP
-    static char directIp[64] = "192.168.1.";
+    static char directIp[64] = "";
     static char privateCode[16] = "";
     static std::string hostedCode;
     static std::string onlineMessage;
@@ -1242,6 +1242,10 @@ void gevrMultiplayerPage(bool &open, bool &startMatch, const ImVec4 &gold, const
             onlineMessage = status;
     }
     netIcePoll();
+
+    const char *networkError = netGetLastErrorText();
+    if (networkError && networkError[0])
+        onlineMessage = networkError;
 
     if (netIsHost()) {
         // Launcher idle kick: if host is inactive for 10 minutes, stop hosting
@@ -1612,12 +1616,14 @@ void gevrMultiplayerPage(bool &open, bool &startMatch, const ImVec4 &gold, const
                             }
 
                             // 3. LAN Games Discovered
-                            netDiscoveryInit();
-                            int count = netDiscoveryGetServerCount();
+                            const bool discoveryAvailable = netDiscoveryInit();
+                            int count = discoveryAvailable ? netDiscoveryGetServerCount() : 0;
                             char lanLabel[80];
                             snprintf(lanLabel, sizeof(lanLabel), "LAN Games Discovered (%d)###acc_lan", count);
                             if (joinMethod == 2) {
-                                if (count == 0) {
+                                if (!discoveryAvailable) {
+                                    ImGui::TextDisabled("LAN discovery is unavailable; use Direct IP to join.");
+                                } else if (count == 0) {
                                     ImGui::TextDisabled("Searching your Wi-Fi network for GoldenEye VR hosts...");
                                 } else {
                                     for (int i = 0; i < count; i++) {
@@ -1641,6 +1647,7 @@ void gevrMultiplayerPage(bool &open, bool &startMatch, const ImVec4 &gold, const
                                             netIceStop();
                                             clientJoinId.clear();
                                             g_joinedViaInternet = false;
+                                            onlineMessage = "Connecting to " + std::string(srv->host_ip) + "...";
                                             netConnect(srv->host_ip, srv->port);
                                         }
                                         if (full)
@@ -1660,6 +1667,7 @@ void gevrMultiplayerPage(bool &open, bool &startMatch, const ImVec4 &gold, const
                                     netIceStop();
                                     clientJoinId.clear();
                                     g_joinedViaInternet = false;
+                                    onlineMessage = "Connecting to host...";
                                     netConnect(directIp, GEVR_DEFAULT_PORT);
                                 }
                             }
@@ -1741,8 +1749,9 @@ void gevrMultiplayerPage(bool &open, bool &startMatch, const ImVec4 &gold, const
                 g_joinedViaInternet = false;
                 gevrJavaCommand("requestVoicePermission", "");
                 netIceStartHost();
-                netDiscoveryInit();
-                netDiscoveryStartBroadcasting(gameName.c_str(), GEVR_DEFAULT_PORT);
+                const bool discoveryAvailable = netDiscoveryInit();
+                if (discoveryAvailable)
+                    netDiscoveryStartBroadcasting(gameName.c_str(), GEVR_DEFAULT_PORT);
                 netLobbySetCharacter((uint8_t)VrMpChr);
                 gevrSendLoadout();
                 {
@@ -1751,7 +1760,9 @@ void gevrMultiplayerPage(bool &open, bool &startMatch, const ImVec4 &gold, const
                 }
                 hostedCode.clear();
                 hostJoinIds.clear();
-                onlineMessage = "Registering online lobby...";
+                onlineMessage = discoveryAvailable
+                    ? "Registering online lobby..."
+                    : "Host started; LAN discovery is unavailable. Players can join by Direct IP.";
                 const std::string command =
                     gevrLobbyCreateCommand(gameName, VrMpStage, VrMpWeaponSet, netGetMaxPlayers());
                 gevrJavaCommand("lobbyCommand", command.c_str());
@@ -1795,8 +1806,10 @@ extern "C" void gevrLobbyGameTick(void)
                     std::to_string(netGetMaxPlayers()) + "|" +
                     (netGetPhase() == NET_PHASE_IN_PROGRESS ? "in_progress" : "warmup") + "|1|" + gevrLobbyName()).c_str());
             }
-            netDiscoveryInit();
-            netDiscoveryStartBroadcasting(netGetGameName(), GEVR_DEFAULT_PORT);
+            if (netDiscoveryInit())
+                netDiscoveryStartBroadcasting(netGetGameName(), GEVR_DEFAULT_PORT);
+            else
+                vr_log("launcher: LAN discovery unavailable after host migration");
             vr_log("launcher: took the match over%s, beacon '%s'", internet ? " with the internet lobby" : "", netGetGameName());
             lastPhase = NET_PHASE_WAITING;
             lastRefresh = 0;

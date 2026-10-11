@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 import urllib.request
@@ -51,7 +52,7 @@ def build_core():
     # unrelated game/world function bodies: the headless fixture has no renderer.
     source=(ROOT/"port/src/net/net_core.c").read_text(encoding="utf-8")
     masked=re.sub(r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'',lambda m:"".join("\n" if c=="\n" else " " for c in m.group()),source,flags=re.S)
-    keep={"netResetLobbyState","netIsHost","netGetState","netGetConnectedPlayerCount","netGetMaxPlayers","netPlayerInRound","netVoiceSameGroup","netVoiceModeForPair","netTeamRosterReady","netGetSlotTeam","netGetSlotPing","netSlotIsSpectator","netVoiceSlotSpectating","netTeamScore","netSetSlotTeam","netLobbySetConfig","netLobbySetReady","netHostRoundEnded","netStageEligible","netLatchRoundSettings","netValidConfig","netWriteRoundSettings","netReadRoundSettings","netSendMatchSnapshot","netHostLost","netForgetPlayerScore","netClearVotes","netBroadcastBuf","netBroadcastPacket","netBroadcastLobbyState","netCancelRound","netSendCountdown"}
+    keep={"netResetLobbyState","netIsHost","netGetState","netHandlePacket","netGetConnectedPlayerCount","netGetMaxPlayers","netPlayerInRound","netVoiceSameGroup","netVoiceModeForPair","netTeamRosterReady","netGetSlotTeam","netGetSlotPing","netSlotIsSpectator","netVoiceSlotSpectating","netTeamScore","netSetSlotTeam","netLobbySetConfig","netLobbySetReady","netHostRoundEnded","netStageEligible","netLatchRoundSettings","netValidConfig","netWriteRoundSettings","netReadRoundSettings","netSendMatchSnapshot","netHostLost","netForgetPlayerScore","netClearVotes","netBroadcastBuf","netBroadcastPacket","netBroadcastLobbyState","netCancelRound","netSendCountdown"}
     keep.update({"netLobbyCanLaunch","netRoundRosterReady","netLocalReady","gevrNetSetReady","netActiveFunFlags","netActiveLineMode","netActiveGunSize","gevrNetConfigGet","gevrNetConfigSet","netScheduleRound","netAllLoaded","netReadyProgress","netHostStartRoundNow","netHostContinue","netIsActive","netDamageAllowed","netApplyAmmoPacket","netObjectByIndex","netSnapshotObjectType","netSendAmmoState"})
     keep.update({"netInvalidateHitSlot","netClearHostHits","netSetHostEqualization","netGetHostEqualization","netHostBaseDelayMs","netGetSlotHostDelayMs","netHostEqualizationText","netTransitionRoundPhase","netBroadcastRoundPhase","netObserveHitMove","netHitReportAllowed","netProcessHitReport","netExecuteHostHit","netQueueHostHit","netDrainHostHits","netSlotOccupied","netSendHitReport"})
     keep.update({"netMapShotTime","netResetCombatEpoch","netWriteCombatIdentity","netReadCombatIdentity","netImportCombatIdentity","netSendClockTo","netClockTick","netReceiveClock","netExplosiveWeapon","netAcceptHit","netReceiveHitReport","netBeginLocalShot","netEndLocalShot","netMakeLocalHit","netNextLife","netAcceptRespawn","netSendRespawnEvent","netSendLocalPlayerMove","netLocalIsSpectator","netReceiveDamageEvent","netReceiveRespawn","netCombatClocksReady"})
@@ -68,13 +69,22 @@ def build_core():
     subset=NATIVE/"net_core_test_subset.inc";subset.write_text(source,encoding="utf-8")
     fixture=(ROOT/"port/tests/net_core_native.c").read_text(encoding="utf-8").replace('../src/net/net_core.c',subset.as_posix())
     generated=NATIVE/"net_core_native.c";generated.write_text(fixture,encoding="utf-8")
-    args=[shutil.which("gcc") or "gcc","-shared","-O2","-fms-extensions","-Wno-builtin-declaration-mismatch"]
+    if os.name == "nt":
+        compiler = shutil.which("gcc") or "gcc"
+        library = NATIVE / "net_core_native.dll"
+        args = [compiler, "-shared", "-O2", "-fms-extensions", "-Wno-builtin-declaration-mismatch"]
+    else:
+        compiler = shutil.which("clang") or shutil.which("cc") or "cc"
+        suffix = ".dylib" if sys.platform == "darwin" else ".so"
+        library = NATIVE / ("net_core_native" + suffix)
+        linker = "-dynamiclib" if sys.platform == "darwin" else "-shared"
+        args = [compiler, linker, "-fPIC", "-O2", "-fms-extensions", "-Wno-implicit-function-declaration", "-D__ANDROID__=1"]
     args += ["-D"+v for v in ("GEVR=1","PLATFORM_64BIT=1","_LANGUAGE_C=1","VERSION=2","VERSION_US=1","LANG_US=1")]
     args += ["-I"+str(ROOT/v) for v in (".","port/include","include","src","src/game","port/src","port/src/net")]
-    args += [str(generated),str(ROOT/"port/src/net/netbuf.c"),str(ROOT/"port/src/net/net_match.c"),"-o",str(NATIVE/"net_core_native.dll")]
+    args += [str(generated),str(ROOT/"port/src/net/netbuf.c"),str(ROOT/"port/src/net/net_match.c"),"-o",str(library)]
     result=subprocess.run(args,cwd=ROOT,capture_output=True,text=True)
     if result.returncode: raise RuntimeError(result.stderr)
-    return C.CDLL(str(NATIVE/"net_core_native.dll"))
+    return C.CDLL(str(library))
 
 def build_fixture(name, source=None):
     fixture=(ROOT/f"port/tests/{name}.c").read_text(encoding="utf-8")
@@ -188,6 +198,7 @@ class MultiplayerNativeTests(unittest.TestCase):
     def test_clock_offsets_and_bounds(self): self.assertEqual(self.lib.test_clock_math(),0)
     def test_timestamp_and_life_packet_roundtrips(self): self.assertEqual(self.lib.test_timing_protocol(),0)
     def test_owner_damage_and_respawn_packets(self): self.assertEqual(self.core.test_core_owner_packets(),0)
+    def test_current_wrong_and_malformed_connection_headers(self): self.assertEqual(self.core.test_core_packet_validation(),0)
     def test_clock_exchange_authentication(self): self.assertEqual(self.core.test_core_clock_exchange(),0)
     def test_shot_timestamp_replay_and_respawn_validation(self): self.assertEqual(self.core.test_core_timed_hits(),0)
     def test_late_join_round_and_migration_identity(self): self.assertEqual(self.core.test_core_combat_identity(),0)

@@ -59,6 +59,14 @@ static int s_server_count = 0;
  * list (user). Random per run, so it holds on any number of interfaces. */
 static uint32_t s_self_id = 0;
 
+static void netDiscoveryCloseSocket(void) {
+    if (s_disc_socket != INVALID_SOCKET) {
+        CLOSE_SOCKET(s_disc_socket);
+        s_disc_socket = INVALID_SOCKET;
+    }
+    s_broadcasting = false;
+}
+
 bool netDiscoveryInit(void) {
     if (s_disc_socket != INVALID_SOCKET) return true;
 
@@ -73,11 +81,14 @@ bool netDiscoveryInit(void) {
     s_disc_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (s_disc_socket == INVALID_SOCKET) return false;
     
-    /* Enable broadcast */
+    /* A host must be able to send the discovery beacon. */
     int broadcast_enable = 1;
-    setsockopt(s_disc_socket, SOL_SOCKET, SO_BROADCAST, (const char *)&broadcast_enable, sizeof(broadcast_enable));
+    if (setsockopt(s_disc_socket, SOL_SOCKET, SO_BROADCAST, (const char *)&broadcast_enable, sizeof(broadcast_enable)) != 0) {
+        netDiscoveryCloseSocket();
+        return false;
+    }
     
-    /* Allow address reuse */
+    /* Allow address reuse where supported; binding still has to succeed. */
     int reuse = 1;
 #ifdef SO_REUSEADDR
     setsockopt(s_disc_socket, SOL_SOCKET, SO_REUSEADDR, (const char *)&reuse, sizeof(reuse));
@@ -86,13 +97,19 @@ bool netDiscoveryInit(void) {
     setsockopt(s_disc_socket, SOL_SOCKET, SO_REUSEPORT, (const char *)&reuse, sizeof(reuse));
 #endif
     
-    /* Non-blocking socket */
+    /* A blocking receive would stall the launcher/game tick. */
 #ifdef _WIN32
     u_long non_blocking = 1;
-    ioctlsocket(s_disc_socket, FIONBIO, &non_blocking);
+    if (ioctlsocket(s_disc_socket, FIONBIO, &non_blocking) != 0) {
+        netDiscoveryCloseSocket();
+        return false;
+    }
 #else
     int flags = fcntl(s_disc_socket, F_GETFL, 0);
-    fcntl(s_disc_socket, F_SETFL, flags | O_NONBLOCK);
+    if (flags < 0 || fcntl(s_disc_socket, F_SETFL, flags | O_NONBLOCK) < 0) {
+        netDiscoveryCloseSocket();
+        return false;
+    }
 #endif
 
     struct sockaddr_in recv_addr;
@@ -101,22 +118,22 @@ bool netDiscoveryInit(void) {
     recv_addr.sin_port = htons(GEVR_DISCOVERY_PORT);
     recv_addr.sin_addr.s_addr = INADDR_ANY;
     
-    bind(s_disc_socket, (struct sockaddr *)&recv_addr, sizeof(recv_addr));
+    if (bind(s_disc_socket, (struct sockaddr *)&recv_addr, sizeof(recv_addr)) != 0) {
+        netDiscoveryCloseSocket();
+        return false;
+    }
     
     s_server_count = 0;
     return true;
 }
 
 void netDiscoveryShutdown(void) {
-    if (s_disc_socket != INVALID_SOCKET) {
-        CLOSE_SOCKET(s_disc_socket);
-        s_disc_socket = INVALID_SOCKET;
-    }
-    s_broadcasting = false;
+    netDiscoveryCloseSocket();
     s_server_count = 0;
 }
 
 void netDiscoveryStartBroadcasting(const char *server_name, uint16_t game_port) {
+    if (s_disc_socket == INVALID_SOCKET) return;
     s_broadcasting = true;
     s_broadcast_port = game_port ? game_port : GEVR_DEFAULT_PORT;
     if (server_name) {
@@ -158,52 +175,60 @@ void netDiscoveryUpdate(uint32_t current_time_ms) {
                (struct sockaddr *)&broadcast_addr, sizeof(broadcast_addr));
     }
     
-    /* 2. Receive incoming beacons */
-    char buffer[256];
-    struct sockaddr_in sender_addr;
-    socklen_t addr_len = sizeof(sender_addr);
-    
-    int bytes = recvfrom(s_disc_socket, buffer, sizeof(buffer), 0,
-                         (struct sockaddr *)&sender_addr, &addr_len);
-    while (bytes >= (int)sizeof(NetDiscoveryBeacon)) {
-        const NetDiscoveryBeacon *b = (const NetDiscoveryBeacon *)buffer;
+    /* 2. Drain every datagram; ignore malformed or incompatible beacons. */
+    for (;;) {
+        char buffer[256];
+        struct sockaddr_in sender_addr;
+        socklen_t addr_len = sizeof(sender_addr);
+        int bytes = recvfrom(s_disc_socket, buffer, sizeof(buffer), 0,
+                             (struct sockaddr *)&sender_addr, &addr_len);
+        if (bytes < 0) break;
+        if (bytes != (int)sizeof(NetDiscoveryBeacon)) continue;
+
+        NetDiscoveryBeacon beacon;
+        memcpy(&beacon, buffer, sizeof(beacon));
+        const NetDiscoveryBeacon *b = &beacon;
         uint32_t magic = PD_LE32(b->magic);
         uint16_t version = PD_LE16(b->version);
         uint16_t port = PD_LE16(b->port);
-        if (magic == GEVR_NET_MAGIC && version == GEVR_NET_VERSION && PD_LE32(b->host_id) != s_self_id) {
-            char sender_ip[32];
-            inet_ntop(AF_INET, &sender_addr.sin_addr, sender_ip, sizeof(sender_ip));
-            
-            /* Update existing or add new server */
-            int found_idx = -1;
-            for (int i = 0; i < s_server_count; i++) {
-                if (strcmp(s_servers[i].host_ip, sender_ip) == 0 && s_servers[i].port == port) {
-                    found_idx = i;
-                    break;
-                }
-            }
-            
-            if (found_idx < 0 && s_server_count < GEVR_MAX_LAN_SERVERS) {
-                found_idx = s_server_count++;
-            }
-            
-            if (found_idx >= 0) {
-                NetDiscoveredServer *srv = &s_servers[found_idx];
-                snprintf(srv->host_ip, sizeof(srv->host_ip), "%s", sender_ip);
-                srv->port = port;
-                snprintf(srv->server_name, sizeof(srv->server_name), "%s", b->name);
-                srv->player_count = b->player_count;
-                srv->max_players = b->max_players;
-                srv->stage_num = b->stage_num;
-                srv->weapon_set = b->weapon_set;
-                srv->phase = b->phase;
-                srv->joinable = b->joinable;
-                srv->last_seen_ms = current_time_ms;
+        const bool valid_name = memchr(b->name, '\0', sizeof(b->name)) != NULL;
+        if (magic != GEVR_NET_MAGIC || version != GEVR_NET_VERSION || !valid_name ||
+            port == 0 || b->max_players < 2 || b->max_players > GEVR_MAX_PLAYERS ||
+            b->player_count == 0 || b->player_count > b->max_players ||
+            b->phase > NET_PHASE_IN_PROGRESS || b->joinable > 1 ||
+            PD_LE32(b->host_id) == 0 || PD_LE32(b->host_id) == s_self_id) {
+            continue;
+        }
+
+        char sender_ip[32];
+        if (!inet_ntop(AF_INET, &sender_addr.sin_addr, sender_ip, sizeof(sender_ip))) continue;
+
+        /* Update existing or add new server. */
+        int found_idx = -1;
+        for (int i = 0; i < s_server_count; i++) {
+            if (strcmp(s_servers[i].host_ip, sender_ip) == 0 && s_servers[i].port == port) {
+                found_idx = i;
+                break;
             }
         }
-        
-        bytes = recvfrom(s_disc_socket, buffer, sizeof(buffer), 0,
-                         (struct sockaddr *)&sender_addr, &addr_len);
+
+        if (found_idx < 0 && s_server_count < GEVR_MAX_LAN_SERVERS) {
+            found_idx = s_server_count++;
+        }
+
+        if (found_idx >= 0) {
+            NetDiscoveredServer *srv = &s_servers[found_idx];
+            snprintf(srv->host_ip, sizeof(srv->host_ip), "%s", sender_ip);
+            srv->port = port;
+            snprintf(srv->server_name, sizeof(srv->server_name), "%s", b->name);
+            srv->player_count = b->player_count;
+            srv->max_players = b->max_players;
+            srv->stage_num = b->stage_num;
+            srv->weapon_set = b->weapon_set;
+            srv->phase = b->phase;
+            srv->joinable = b->joinable;
+            srv->last_seen_ms = current_time_ms;
+        }
     }
     
     /* 3. Prune servers older than 5 seconds */

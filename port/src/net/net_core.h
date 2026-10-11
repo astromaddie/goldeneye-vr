@@ -44,6 +44,7 @@ bool netConnect(const char *host_addr, uint16_t port);
 void netDisconnect(void);
 
 /* Status Queries */
+const char *netGetLastErrorText(void); /* Empty unless the most recent network operation failed. */
 NetState netGetState(void);
 bool netIsActive(void);
 bool netIsHost(void);

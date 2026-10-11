@@ -46,6 +46,7 @@
 
 static bool s_initialized = false;
 static NetState s_state = NET_STATE_OFFLINE;
+static const char *s_last_error_text = "";
 static NetPhase s_phase = NET_PHASE_WAITING;
 static int s_max_players = GEVR_MAX_PLAYERS;
 static bool s_round_reset_pending = false;
@@ -567,6 +568,7 @@ bool netInit(void) {
     
     if (enet_initialize() != 0) {
         NET_ERR("Failed to initialize ENet!");
+        s_last_error_text = "Could not initialize networking.";
         return false;
     }
     
@@ -590,6 +592,7 @@ void netShutdown(void) {
 
 bool netHostStart(uint16_t port) {
     if (!s_initialized && !netInit()) return false;
+    s_last_error_text = "";
     netDisconnect();
     
     ENetAddress address;
@@ -599,6 +602,7 @@ bool netHostStart(uint16_t port) {
     s_host = enet_host_create(&address, GEVR_MAX_PLAYERS, NET_CHAN_MAX, 0, 0, 0);
     if (!s_host) {
         NET_ERR("Failed to create ENet host on port %d!", address.port);
+        s_last_error_text = "Could not open the local game port.";
         return false;
     }
     enet_host_set_virtual_transport(s_host, s_virtual_send, s_virtual_receive, s_virtual_context);
@@ -629,6 +633,7 @@ bool netHostStart(uint16_t port) {
 
 bool netConnect(const char *host_addr, uint16_t port) {
     if (!s_initialized && !netInit()) return false;
+    s_last_error_text = "";
     /* To the new host after the old one left (netHostLost): the slot, the
      * lobby and the match stay; only the connection is new. */
     const bool rejoin = s_state == NET_STATE_MIGRATING;
@@ -642,20 +647,27 @@ bool netConnect(const char *host_addr, uint16_t port) {
         netDisconnect();
     }
 
+    ENetAddress address;
+    const char *target = host_addr ? host_addr : "127.0.0.1";
+    if (enet_address_set_ip(&address, target) != 0) {
+        NET_ERR("Invalid host address: %s", target);
+        s_last_error_text = "Enter a valid host IP address.";
+        return false;
+    }
+    address.port = port ? port : GEVR_DEFAULT_PORT;
+
     s_host = enet_host_create(NULL, 1, NET_CHAN_MAX, 0, 0, 0);
     if (!s_host) {
         NET_ERR("Failed to create client ENet host!");
+        s_last_error_text = "Could not open a local network connection.";
         return false;
     }
     enet_host_set_virtual_transport(s_host, s_virtual_send, s_virtual_receive, s_virtual_context);
-    
-    ENetAddress address;
-    enet_address_set_ip(&address, host_addr ? host_addr : "127.0.0.1");
-    address.port = port ? port : GEVR_DEFAULT_PORT;
-    
+
     s_server_peer = enet_host_connect(s_host, &address, NET_CHAN_MAX, 0);
     if (!s_server_peer) {
-        NET_ERR("Failed to initiate connection to %s:%d!", host_addr, address.port);
+        NET_ERR("Failed to initiate connection to %s:%d!", target, address.port);
+        s_last_error_text = "Could not start the connection to that host.";
         enet_host_destroy(s_host);
         s_host = NULL;
         return false;
@@ -668,11 +680,12 @@ bool netConnect(const char *host_addr, uint16_t port) {
         netResetLobbyState();
     }
 
-    NET_LOG("Connecting to %s:%d...%s", host_addr, address.port, rejoin ? " (rejoining as slot)" : "");
+    NET_LOG("Connecting to %s:%d...%s", target, address.port, rejoin ? " (rejoining as slot)" : "");
     return true;
 }
 
 void netDisconnect(void) {
+    s_last_error_text = "";
     netClearHostHits();s_combat_epoch=0;memset(s_clock_sync,0,sizeof(s_clock_sync));
     netVoiceReset();
     s_waiting_for_match_snapshot = false;
@@ -708,6 +721,10 @@ void netDisconnect(void) {
     s_migrate_deadline_us = 0;
     netResetLobbyState();
     NET_LOG("Disconnected and reset network state.");
+}
+
+const char *netGetLastErrorText(void) {
+    return s_last_error_text;
 }
 
 NetState netGetState(void) {
@@ -2122,7 +2139,12 @@ static void netReceiveRespawn(ENetPeer *peer,int slot,struct netbuf *b,const u8 
 }
 
 static void netHandlePacket(ENetPeer *peer, const uint8_t *data, size_t size) {
-    if (size < 8) return;
+    if (size < 8) {
+        NET_ERR("Disconnected peer sending a truncated packet (%u bytes)", (unsigned)size);
+        s_last_error_text = "Received invalid network data.";
+        enet_peer_disconnect(peer, 0);
+        return;
+    }
     
     struct netbuf buf;
     netbufStartReadData(&buf, data, (u32)size);
@@ -2133,9 +2155,11 @@ static void netHandlePacket(ENetPeer *peer, const uint8_t *data, size_t size) {
     const uint8_t slot_id = netbufReadU8(&buf);
     
     if (magic != GEVR_NET_MAGIC || version != GEVR_NET_VERSION) {
-        NET_ERR("Ignored packet with invalid magic/version: %08x v%d", magic, version);
-        if (magic == GEVR_NET_MAGIC && version != GEVR_NET_VERSION)
-            enet_peer_disconnect(peer, 0);
+        NET_ERR("Rejected packet with invalid magic/version: %08x v%d", magic, version);
+        s_last_error_text = magic == GEVR_NET_MAGIC
+            ? "The other player is running a different game protocol. Use matching builds."
+            : "Received invalid network data.";
+        enet_peer_disconnect(peer, 0);
         return;
     }
     
@@ -3344,6 +3368,8 @@ void netPoll(void) {
                     s_server_peer = NULL;
                     s_state = NET_STATE_OFFLINE;
                     netVoiceReset();
+                    if (!s_last_error_text[0])
+                        s_last_error_text = "Connection ended. Check that the host is online and both builds match.";
                 }
                 event.peer->data = NULL;
                 break;

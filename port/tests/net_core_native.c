@@ -5,7 +5,8 @@ static void fixtureDamage(uint8_t,uint8_t,uint8_t,float,float,float);
 #include "../src/net/net_core.c"
 #define EXPORT __declspec(dllexport)
 struct player_data g_playerPlayerData[4];
-s32 g_gameOverFlag, D_80048394;
+s32 g_gameOverFlag, D_80048394, D_800483A8;
+stagesetup g_CurrentSetup;
 struct player *g_playerPointers[4];
 s32 startpadcount=8;
 static unsigned char sent_data[512];
@@ -52,6 +53,18 @@ void netVoiceForgetSlot(uint8_t slot) { (void)slot;voice_resets++; }
 ENetPacket *enet_packet_create(const void *data,size_t size,uint32_t flags) { (void)flags;if(size<=sizeof(sent_data)) { memcpy(sent_data,data,size);sent_size=size; }return NULL; }
 int enet_peer_send(ENetPeer *peer,uint8_t channel,ENetPacket *packet) { (void)peer;(void)channel;(void)packet;return 0; }
 int enet_address_get_ip(const ENetAddress *address,char *buffer,size_t size) { (void)address;snprintf(buffer,size,"127.0.0.1");return 0; }
+static int invalid_packet_disconnects;
+void enet_peer_disconnect(ENetPeer *peer,uint32_t data) { (void)peer;(void)data;invalid_packet_disconnects++; }
+LEVELID bossGetStageNum(void) { return 0; }
+void chrpropDisable(PropRecord *prop) { (void)prop; }
+void chrpropEnable(PropRecord *prop) { (void)prop; }
+void doorBuildClippedVertices(DoorRecord *door) { (void)door; }
+void doorUpdateBbox(DoorRecord *door) { (void)door; }
+void mpCalculateAwards(bool gameoverdelay) { (void)gameoverdelay; }
+int netPlayersWereTicked(void) { return 0; }
+void netVoiceReceive(uint8_t slot,uint32_t sequence,const uint8_t *packet,uint16_t size) { (void)slot;(void)sequence;(void)packet;(void)size; }
+void objFreePermanently(ObjectRecord *obj,bool freeprop) { (void)obj;(void)freeprop; }
+void randomSetSeed(u32 seed) { (void)seed; }
 static void fixture(int scenario) {
     memset(&s_round,0,sizeof(s_round)); memset(g_playerPlayerData,0,sizeof(g_playerPlayerData));
     s_state=NET_STATE_HOSTING_LOBBY;s_local_slot=s_host_slot=0;netResetLobbyState();
@@ -62,6 +75,45 @@ static void fixture(int scenario) {
     memset(g_playerPointers,0,sizeof(g_playerPointers));memset(s_client_peers,0,sizeof(s_client_peers));
     for(int i=0;i<4;i++) {s_lobby_state.slots[i].connected=1;s_lobby_state.slots[i].ready=1;s_lobby_state.slots[i].loaded=1;}
 }
+EXPORT int test_core_packet_validation(void) {
+    fixture(0);
+    ENetPeer peer={0};
+    uint8_t raw[8];
+    struct netbuf b={.data=raw,.size=sizeof(raw)};
+
+    invalid_packet_disconnects=0;
+    s_last_error_text="";
+    netbufStartWrite(&b);
+    netbufWriteU32(&b,GEVR_NET_MAGIC);
+    netbufWriteU16(&b,GEVR_NET_VERSION);
+    netbufWriteU8(&b,NET_MSG_NONE);
+    netbufWriteU8(&b,0xff);
+    netHandlePacket(&peer,raw,b.wp);
+    if(invalid_packet_disconnects || netGetLastErrorText()[0]) return 1;
+
+    netbufStartWrite(&b);
+    netbufWriteU32(&b,GEVR_NET_MAGIC);
+    netbufWriteU16(&b,GEVR_NET_VERSION-1);
+    netbufWriteU8(&b,NET_MSG_NONE);
+    netbufWriteU8(&b,0xff);
+    netHandlePacket(&peer,raw,b.wp);
+    if(invalid_packet_disconnects!=1 || strcmp(netGetLastErrorText(),"The other player is running a different game protocol. Use matching builds.")) return 2;
+
+    s_last_error_text="";
+    netbufStartWrite(&b);
+    netbufWriteU32(&b,0);
+    netbufWriteU16(&b,GEVR_NET_VERSION);
+    netbufWriteU8(&b,NET_MSG_NONE);
+    netbufWriteU8(&b,0xff);
+    netHandlePacket(&peer,raw,b.wp);
+    if(invalid_packet_disconnects!=2 || strcmp(netGetLastErrorText(),"Received invalid network data.")) return 3;
+
+    s_last_error_text="";
+    netHandlePacket(&peer,raw,7);
+    if(invalid_packet_disconnects!=3 || strcmp(netGetLastErrorText(),"Received invalid network data.")) return 4;
+    return 0;
+}
+
 EXPORT int test_core_teams(void) {
     fixture(5);
     if(netTeamRosterReady()) return 1;
